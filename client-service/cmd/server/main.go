@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -22,19 +22,24 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("CLIENT_GRPC_PORT", "9093")
 	cfg.HTTPPort = envOrDefault("CLIENT_HTTP_PORT", "8083")
 
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("DB connection failed: %v", err)
+		slog.Error("DB connection failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.Migrate(db); err != nil {
-		log.Fatalf("DB migration failed: %v", err)
+		slog.Error("DB migration failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.SeedPermissions(db); err != nil {
-		log.Fatalf("Permission seeding failed: %v", err)
+		slog.Error("Permission seeding failed", "error", err)
+		os.Exit(1)
 	}
 
 	clientH := handler.NewClientHandler(cfg, db)
@@ -51,13 +56,15 @@ func main() {
 
 	grpcLis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
-		log.Fatalf("gRPC listen failed: %v", err)
+		slog.Error("gRPC listen failed", "error", err)
+		os.Exit(1)
 	}
 
 	go func() {
-		log.Printf("Client gRPC server listening on :%s", cfg.GRPCPort)
+		slog.Info("Client gRPC server listening", "port", cfg.GRPCPort)
 		if err := grpcServer.Serve(grpcLis); err != nil {
-			log.Fatalf("gRPC server error: %v", err)
+			slog.Error("gRPC server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -67,7 +74,8 @@ func main() {
 	grpcEndpoint := "localhost:" + cfg.GRPCPort
 
 	if err := clientv1.RegisterClientServiceHandlerFromEndpoint(ctx, gwMux, grpcEndpoint, dialOpts); err != nil {
-		log.Fatalf("Failed to register client HTTP gateway: %v", err)
+		slog.Error("Failed to register client HTTP gateway", "error", err)
+		os.Exit(1)
 	}
 
 	httpMux := http.NewServeMux()
@@ -80,9 +88,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Client HTTP gateway listening on :%s", cfg.HTTPPort)
+		slog.Info("Client HTTP gateway listening", "port", cfg.HTTPPort)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -90,12 +99,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down client-service gracefully...")
+	slog.Info("Shutting down client-service gracefully")
 	grpcServer.GracefulStop()
 	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("HTTP shutdown error: %v", err)
+		slog.Error("HTTP shutdown error", "error", err)
 	}
-	log.Println("client-service stopped")
+	slog.Info("client-service stopped")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {

@@ -15,9 +15,9 @@ import (
 
 type EmployeeService struct {
 	cfg          *config.Config
-	employeeRepo *repository.EmployeeRepository
-	permRepo     *repository.PermissionRepository
-	tokenRepo    *repository.TokenRepository
+	employeeRepo repository.EmployeeRepositoryInterface
+	permRepo     repository.PermissionRepositoryInterface
+	tokenRepo    repository.TokenRepositoryInterface
 	notifSvc     *NotificationService
 }
 
@@ -27,6 +27,18 @@ func NewEmployeeService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationS
 		employeeRepo: repository.NewEmployeeRepository(db),
 		permRepo:     repository.NewPermissionRepository(db),
 		tokenRepo:    repository.NewTokenRepository(db),
+		notifSvc:     notifSvc,
+	}
+}
+
+// NewEmployeeServiceWithRepos constructs an EmployeeService with injected repository interfaces,
+// allowing mock implementations to be used in unit tests.
+func NewEmployeeServiceWithRepos(cfg *config.Config, empRepo repository.EmployeeRepositoryInterface, permRepo repository.PermissionRepositoryInterface, tokRepo repository.TokenRepositoryInterface, notifSvc *NotificationService) *EmployeeService {
+	return &EmployeeService{
+		cfg:          cfg,
+		employeeRepo: empRepo,
+		permRepo:     permRepo,
+		tokenRepo:    tokRepo,
 		notifSvc:     notifSvc,
 	}
 }

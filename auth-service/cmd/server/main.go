@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -23,22 +23,28 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("AUTH_GRPC_PORT", "9091")
 	cfg.HTTPPort = envOrDefault("AUTH_HTTP_PORT", "8081")
 
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("DB connection failed: %v", err)
+		slog.Error("DB connection failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.Migrate(db); err != nil {
-		log.Fatalf("DB migration failed: %v", err)
+		slog.Error("DB migration failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.SeedPermissions(db); err != nil {
-		log.Fatalf("Permission seeding failed: %v", err)
+		slog.Error("Permission seeding failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.SeedDefaultAdmin(db); err != nil {
-		log.Fatalf("Admin seeding failed: %v", err)
+		slog.Error("Admin seeding failed", "error", err)
+		os.Exit(1)
 	}
 
 	notifSvc := infrasvc.NewNotificationService(cfg)
@@ -55,13 +61,15 @@ func main() {
 
 	grpcLis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
-		log.Fatalf("gRPC listen failed: %v", err)
+		slog.Error("gRPC listen failed", "error", err)
+		os.Exit(1)
 	}
 
 	go func() {
-		log.Printf("Auth gRPC server listening on :%s", cfg.GRPCPort)
+		slog.Info("Auth gRPC server listening", "port", cfg.GRPCPort)
 		if err := grpcServer.Serve(grpcLis); err != nil {
-			log.Fatalf("gRPC server error: %v", err)
+			slog.Error("gRPC server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -71,7 +79,8 @@ func main() {
 	grpcEndpoint := "localhost:" + cfg.GRPCPort
 
 	if err := authv1.RegisterAuthServiceHandlerFromEndpoint(ctx, gwMux, grpcEndpoint, dialOpts); err != nil {
-		log.Fatalf("Failed to register auth HTTP gateway: %v", err)
+		slog.Error("Failed to register auth HTTP gateway", "error", err)
+		os.Exit(1)
 	}
 
 	httpMux := http.NewServeMux()
@@ -84,9 +93,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Auth HTTP gateway listening on :%s", cfg.HTTPPort)
+		slog.Info("Auth HTTP gateway listening", "port", cfg.HTTPPort)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -94,12 +104,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down auth-service gracefully...")
+	slog.Info("Shutting down auth-service gracefully")
 	grpcServer.GracefulStop()
 	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("HTTP shutdown error: %v", err)
+		slog.Error("HTTP shutdown error", "error", err)
 	}
-	log.Println("auth-service stopped")
+	slog.Info("auth-service stopped")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {

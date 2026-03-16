@@ -1,0 +1,248 @@
+package service_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/repository"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/service"
+)
+
+// ---- mock client repository ----
+
+type mockClientRepo struct {
+	createFn         func(client *models.Client) error
+	findByIDFn       func(id uint) (*models.Client, error)
+	listFn           func(filter repository.ClientFilter) ([]models.Client, int64, error)
+	updateFn         func(client *models.Client) error
+	emailExistsFn    func(email string, excludeID uint) (bool, error)
+	setPermissionsFn func(client *models.Client, permissions []models.Permission) error
+}
+
+func (m *mockClientRepo) Create(client *models.Client) error {
+	if m.createFn != nil {
+		return m.createFn(client)
+	}
+	return nil
+}
+
+func (m *mockClientRepo) FindByID(id uint) (*models.Client, error) {
+	if m.findByIDFn != nil {
+		return m.findByIDFn(id)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockClientRepo) List(filter repository.ClientFilter) ([]models.Client, int64, error) {
+	if m.listFn != nil {
+		return m.listFn(filter)
+	}
+	return nil, 0, errors.New("not implemented")
+}
+
+func (m *mockClientRepo) Update(client *models.Client) error {
+	if m.updateFn != nil {
+		return m.updateFn(client)
+	}
+	return nil
+}
+
+func (m *mockClientRepo) EmailExists(email string, excludeID uint) (bool, error) {
+	if m.emailExistsFn != nil {
+		return m.emailExistsFn(email, excludeID)
+	}
+	return false, nil
+}
+
+func (m *mockClientRepo) SetPermissions(client *models.Client, permissions []models.Permission) error {
+	if m.setPermissionsFn != nil {
+		return m.setPermissionsFn(client, permissions)
+	}
+	return nil
+}
+
+// ---- mock permission repository ----
+
+type mockPermRepo struct {
+	findByNamesForSubjectFn func(names []string, subjectType string) ([]models.Permission, error)
+}
+
+func (m *mockPermRepo) FindByNamesForSubject(names []string, subjectType string) ([]models.Permission, error) {
+	if m.findByNamesForSubjectFn != nil {
+		return m.findByNamesForSubjectFn(names, subjectType)
+	}
+	return nil, errors.New("not implemented")
+}
+
+// ---- compile-time interface checks ----
+
+var _ repository.ClientRepositoryInterface = (*mockClientRepo)(nil)
+var _ repository.PermissionRepositoryInterface = (*mockPermRepo)(nil)
+
+// ---- test helper ----
+
+func newTestClientService(clientRepo repository.ClientRepositoryInterface, permRepo repository.PermissionRepositoryInterface) *service.ClientService {
+	cfg := &config.Config{}
+	return service.NewClientServiceWithRepos(cfg, clientRepo, permRepo)
+}
+
+// validCreateInput returns a CreateClientInput with all fields valid.
+// Note: CreateClient uses ValidateBankEmail which requires @bank.com suffix.
+func validCreateClientInput() service.CreateClientInput {
+	return service.CreateClientInput{
+		Ime:          "Ana",
+		Prezime:      "Anic",
+		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
+		Pol:          "F",
+		Email:        "ana@bank.com",
+		BrojTelefona: "0651234567",
+		Adresa:       "Ulica 2",
+	}
+}
+
+// ---- tests ----
+
+func TestCreateClient_Success(t *testing.T) {
+	clientRepo := &mockClientRepo{
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return false, nil },
+		createFn:      func(client *models.Client) error { client.ID = 7; return nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	got, err := svc.CreateClient(validCreateClientInput())
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("CreateClient() returned nil client")
+	}
+	if got.ID != 7 {
+		t.Errorf("CreateClient() client.ID = %d, want 7", got.ID)
+	}
+}
+
+func TestCreateClient_DuplicateEmail(t *testing.T) {
+	clientRepo := &mockClientRepo{
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return true, nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	_, err := svc.CreateClient(validCreateClientInput())
+	if err == nil {
+		t.Fatal("CreateClient() expected error for duplicate email, got nil")
+	}
+	if !strings.Contains(err.Error(), "email already in use") {
+		t.Errorf("CreateClient() error = %q, want contains %q", err.Error(), "email already in use")
+	}
+}
+
+func TestCreateClient_InvalidEmail(t *testing.T) {
+	svc := newTestClientService(&mockClientRepo{}, &mockPermRepo{})
+
+	input := validCreateClientInput()
+	input.Email = "not-an-email" // invalid format
+
+	_, err := svc.CreateClient(input)
+	if err == nil {
+		t.Fatal("CreateClient() expected error for invalid email format, got nil")
+	}
+}
+
+func TestGetClient_Found(t *testing.T) {
+	client := &models.Client{ID: 3, Email: "client@bank.com"}
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) { return client, nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	got, err := svc.GetClient(3)
+	if err != nil {
+		t.Fatalf("GetClient() unexpected error: %v", err)
+	}
+	if got == nil || got.ID != 3 {
+		t.Error("GetClient() returned wrong client")
+	}
+}
+
+func TestUpdateClient_NotFound(t *testing.T) {
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) {
+			return nil, errors.New("record not found")
+		},
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	input := service.UpdateClientInput{
+		Ime:          "Ana",
+		Prezime:      "Anic",
+		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
+		Pol:          "F",
+		Email:        "ana@bank.com",
+		BrojTelefona: "0651234567",
+		Adresa:       "Ulica 2",
+	}
+
+	_, err := svc.UpdateClient(999, input)
+	if err == nil {
+		t.Fatal("UpdateClient() expected error for non-existent client, got nil")
+	}
+	if !strings.Contains(err.Error(), "client not found") {
+		t.Errorf("UpdateClient() error = %q, want contains %q", err.Error(), "client not found")
+	}
+}
+
+func TestUpdateClient_DuplicateEmail(t *testing.T) {
+	existing := &models.Client{
+		ID:    4,
+		Email: "old@bank.com",
+	}
+	clientRepo := &mockClientRepo{
+		findByIDFn:    func(id uint) (*models.Client, error) { return existing, nil },
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return true, nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	input := service.UpdateClientInput{
+		Ime:          "Ana",
+		Prezime:      "Anic",
+		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
+		Pol:          "F",
+		Email:        "different@bank.com", // different from current, triggers EmailExists check
+		BrojTelefona: "0651234567",
+		Adresa:       "Ulica 2",
+	}
+
+	_, err := svc.UpdateClient(4, input)
+	if err == nil {
+		t.Fatal("UpdateClient() expected error for duplicate email, got nil")
+	}
+	if !strings.Contains(err.Error(), "email already in use") {
+		t.Errorf("UpdateClient() error = %q, want contains %q", err.Error(), "email already in use")
+	}
+}
+
+func TestUpdateClientPermissions_WrongSubjectType(t *testing.T) {
+	client := &models.Client{ID: 5, Email: "client@bank.com", Permissions: []models.Permission{}}
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) { return client, nil },
+	}
+	// Returns fewer perms than requested — simulating wrong subject type permissions
+	permRepo := &mockPermRepo{
+		findByNamesForSubjectFn: func(names []string, subjectType string) ([]models.Permission, error) {
+			return []models.Permission{{Name: "client.basic"}}, nil
+		},
+	}
+	svc := newTestClientService(clientRepo, permRepo)
+
+	_, err := svc.UpdateClientPermissions(5, []string{"client.basic", "employee.read"})
+	if err == nil {
+		t.Fatal("UpdateClientPermissions() expected error for wrong subject type, got nil")
+	}
+	if !strings.Contains(err.Error(), "client permissions") {
+		t.Errorf("UpdateClientPermissions() error = %q, want contains %q", err.Error(), "client permissions")
+	}
+}

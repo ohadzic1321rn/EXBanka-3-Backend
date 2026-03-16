@@ -13,8 +13,8 @@ import (
 
 type ClientService struct {
 	cfg        *config.Config
-	clientRepo *repository.ClientRepository
-	permRepo   *repository.PermissionRepository
+	clientRepo repository.ClientRepositoryInterface
+	permRepo   repository.PermissionRepositoryInterface
 }
 
 func NewClientService(cfg *config.Config, db *gorm.DB) *ClientService {
@@ -22,6 +22,16 @@ func NewClientService(cfg *config.Config, db *gorm.DB) *ClientService {
 		cfg:        cfg,
 		clientRepo: repository.NewClientRepository(db),
 		permRepo:   repository.NewPermissionRepository(db),
+	}
+}
+
+// NewClientServiceWithRepos constructs a ClientService with injected repository interfaces,
+// allowing mock implementations to be used in unit tests.
+func NewClientServiceWithRepos(cfg *config.Config, clientRepo repository.ClientRepositoryInterface, permRepo repository.PermissionRepositoryInterface) *ClientService {
+	return &ClientService{
+		cfg:        cfg,
+		clientRepo: clientRepo,
+		permRepo:   permRepo,
 	}
 }
 

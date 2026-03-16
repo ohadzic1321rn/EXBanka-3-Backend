@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -23,19 +23,24 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("EMPLOYEE_GRPC_PORT", "9092")
 	cfg.HTTPPort = envOrDefault("EMPLOYEE_HTTP_PORT", "8082")
 
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("DB connection failed: %v", err)
+		slog.Error("DB connection failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.Migrate(db); err != nil {
-		log.Fatalf("DB migration failed: %v", err)
+		slog.Error("DB migration failed", "error", err)
+		os.Exit(1)
 	}
 	if err := database.SeedPermissions(db); err != nil {
-		log.Fatalf("Permission seeding failed: %v", err)
+		slog.Error("Permission seeding failed", "error", err)
+		os.Exit(1)
 	}
 
 	notifSvc := infrasvc.NewNotificationService(cfg)
@@ -53,13 +58,15 @@ func main() {
 
 	grpcLis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
-		log.Fatalf("gRPC listen failed: %v", err)
+		slog.Error("gRPC listen failed", "error", err)
+		os.Exit(1)
 	}
 
 	go func() {
-		log.Printf("Employee gRPC server listening on :%s", cfg.GRPCPort)
+		slog.Info("Employee gRPC server listening", "port", cfg.GRPCPort)
 		if err := grpcServer.Serve(grpcLis); err != nil {
-			log.Fatalf("gRPC server error: %v", err)
+			slog.Error("gRPC server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -69,7 +76,8 @@ func main() {
 	grpcEndpoint := "localhost:" + cfg.GRPCPort
 
 	if err := employeev1.RegisterEmployeeServiceHandlerFromEndpoint(ctx, gwMux, grpcEndpoint, dialOpts); err != nil {
-		log.Fatalf("Failed to register employee HTTP gateway: %v", err)
+		slog.Error("Failed to register employee HTTP gateway", "error", err)
+		os.Exit(1)
 	}
 
 	httpMux := http.NewServeMux()
@@ -82,9 +90,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Employee HTTP gateway listening on :%s", cfg.HTTPPort)
+		slog.Info("Employee HTTP gateway listening", "port", cfg.HTTPPort)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -92,12 +101,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down employee-service gracefully...")
+	slog.Info("Shutting down employee-service gracefully")
 	grpcServer.GracefulStop()
 	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("HTTP shutdown error: %v", err)
+		slog.Error("HTTP shutdown error", "error", err)
 	}
-	log.Println("employee-service stopped")
+	slog.Info("employee-service stopped")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {

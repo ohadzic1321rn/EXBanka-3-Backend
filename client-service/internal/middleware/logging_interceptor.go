@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"google.golang.org/grpc"
@@ -28,7 +28,20 @@ func LoggingInterceptor() grpc.UnaryServerInterceptor {
 			}
 		}
 
-		log.Printf("[gRPC] %-60s | %-20s | %v", info.FullMethod, code, duration)
+		if code != codes.OK {
+			slog.Warn("gRPC request failed",
+				"method", info.FullMethod,
+				"status", code.String(),
+				"duration_ms", duration.Milliseconds(),
+				"error", err,
+			)
+		} else {
+			slog.Info("gRPC request",
+				"method", info.FullMethod,
+				"status", code.String(),
+				"duration_ms", duration.Milliseconds(),
+			)
+		}
 		return resp, err
 	}
 }

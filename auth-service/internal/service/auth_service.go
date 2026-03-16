@@ -16,8 +16,8 @@ import (
 
 type AuthService struct {
 	cfg          *config.Config
-	employeeRepo *repository.EmployeeRepository
-	tokenRepo    *repository.TokenRepository
+	employeeRepo repository.EmployeeRepositoryInterface
+	tokenRepo    repository.TokenRepositoryInterface
 	notifSvc     *NotificationService
 }
 
@@ -26,6 +26,17 @@ func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationServi
 		cfg:          cfg,
 		employeeRepo: repository.NewEmployeeRepository(db),
 		tokenRepo:    repository.NewTokenRepository(db),
+		notifSvc:     notifSvc,
+	}
+}
+
+// NewAuthServiceWithRepos constructs an AuthService with injected repository interfaces,
+// allowing mock implementations to be used in unit tests.
+func NewAuthServiceWithRepos(cfg *config.Config, employeeRepo repository.EmployeeRepositoryInterface, tokenRepo repository.TokenRepositoryInterface, notifSvc *NotificationService) *AuthService {
+	return &AuthService{
+		cfg:          cfg,
+		employeeRepo: employeeRepo,
+		tokenRepo:    tokenRepo,
 		notifSvc:     notifSvc,
 	}
 }
