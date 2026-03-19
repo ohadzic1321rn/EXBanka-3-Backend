@@ -26,10 +26,11 @@ type TransferHandler struct {
 	svc TransferServiceInterface
 }
 
-func NewTransferHandler(db *gorm.DB) *TransferHandler {
+func NewTransferHandler(db *gorm.DB, exchangeServiceURL string) *TransferHandler {
 	accountRepo := repository.NewAccountRepository(db)
 	transferRepo := repository.NewTransferRepository(db)
-	svc := service.NewTransferServiceWithRepos(accountRepo, transferRepo, nil)
+	exchangeSvc := service.NewHTTPExchangeRateService(exchangeServiceURL)
+	svc := service.NewTransferServiceWithRepos(accountRepo, transferRepo, exchangeSvc)
 	return &TransferHandler{svc: svc}
 }
 

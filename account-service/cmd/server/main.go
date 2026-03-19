@@ -35,6 +35,10 @@ func main() {
 		slog.Error("DB migration failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedCurrencies(db); err != nil {
+		slog.Error("Currency seed failed", "error", err)
+		os.Exit(1)
+	}
 
 	accountH := handler.NewAccountHandler(db)
 

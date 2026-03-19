@@ -36,7 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	transferH := handler.NewTransferHandler(db)
+	exchangeURL := envOrDefault("EXCHANGE_SERVICE_URL", "http://exchange-service:8088")
+	transferH := handler.NewTransferHandler(db, exchangeURL)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -99,6 +100,13 @@ func main() {
 		slog.Error("HTTP shutdown error", "error", err)
 	}
 	slog.Info("transfer-service stopped")
+}
+
+func envOrDefault(key, defaultVal string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultVal
 }
 
 func healthCheck(w http.ResponseWriter, _ *http.Request) {

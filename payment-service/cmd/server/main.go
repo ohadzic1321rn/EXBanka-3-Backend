@@ -36,6 +36,10 @@ func main() {
 		slog.Error("DB migration failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedSifrePlacanja(db); err != nil {
+		slog.Error("Sifre placanja seed failed", "error", err)
+		os.Exit(1)
+	}
 
 	recipientH := handler.NewPaymentRecipientHandler(db)
 	paymentH := handler.NewPaymentHandler(db)

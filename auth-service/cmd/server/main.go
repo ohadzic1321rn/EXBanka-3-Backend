@@ -49,6 +49,7 @@ func main() {
 
 	notifSvc := infrasvc.NewNotificationService(cfg)
 	authH := handler.NewAuthHandler(cfg, db, notifSvc)
+	clientAuthH := handler.NewClientAuthHandler(cfg, db, notifSvc)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -85,6 +86,7 @@ func main() {
 
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
+	httpMux.Handle("/api/v1/auth/client/login", middleware.CORS(http.HandlerFunc(clientAuthH.Login)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

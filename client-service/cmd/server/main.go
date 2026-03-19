@@ -41,6 +41,10 @@ func main() {
 		slog.Error("Permission seeding failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedDefaultClient(db); err != nil {
+		slog.Error("Default client seed failed", "error", err)
+		os.Exit(1)
+	}
 
 	clientH := handler.NewClientHandler(cfg, db)
 
