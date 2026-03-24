@@ -36,6 +36,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Firma{},
 		&models.Client{},
 		&models.Account{},
+		&models.Card{},
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
