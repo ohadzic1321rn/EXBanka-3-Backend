@@ -39,3 +39,14 @@ func (r *LoanRepository) ListByClientID(clientID uint) ([]models.Loan, error) {
 	}
 	return loans, nil
 }
+
+// ListByStatus returns all loans with the given status.
+func (r *LoanRepository) ListByStatus(status string) ([]models.Loan, error) {
+	var loans []models.Loan
+	if err := r.db.Where("status = ?", status).
+		Order("created_at ASC").
+		Find(&loans).Error; err != nil {
+		return nil, err
+	}
+	return loans, nil
+}

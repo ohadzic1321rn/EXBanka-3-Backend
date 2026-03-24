@@ -24,6 +24,7 @@ func (r *queryLoanRepo) FindByID(_ uint) (*models.Loan, error) {
 }
 func (r *queryLoanRepo) Save(l *models.Loan) error                          { r.saved = l; return nil }
 func (r *queryLoanRepo) ListByClientID(_ uint) ([]models.Loan, error)       { return r.loans, nil }
+func (r *queryLoanRepo) ListByStatus(_ string) ([]models.Loan, error)       { return r.loans, nil }
 
 type queryInstallmentRepo struct {
 	items []models.LoanInstallment

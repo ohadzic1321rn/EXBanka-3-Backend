@@ -148,6 +148,7 @@ func (m *mockLoanRepo) FindByID(id uint) (*models.Loan, error) {
 }
 func (m *mockLoanRepo) Save(l *models.Loan) error                        { m.saved = l; return nil }
 func (m *mockLoanRepo) ListByClientID(_ uint) ([]models.Loan, error)     { return nil, nil }
+func (m *mockLoanRepo) ListByStatus(_ string) ([]models.Loan, error)     { return nil, nil }
 
 type mockInstallmentRepo struct {
 	batch []models.LoanInstallment

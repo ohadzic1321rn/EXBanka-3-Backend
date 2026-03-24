@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -9,12 +10,16 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/models"
 )
 
+// ErrInvalidInput is returned by service methods when the caller provides invalid data.
+var ErrInvalidInput = errors.New("invalid input")
+
 // LoanRepositoryInterface allows mocking in tests.
 type LoanRepositoryInterface interface {
 	Create(loan *models.Loan) error
 	FindByID(id uint) (*models.Loan, error)
 	Save(loan *models.Loan) error
 	ListByClientID(clientID uint) ([]models.Loan, error)
+	ListByStatus(status string) ([]models.Loan, error)
 }
 
 // InstallmentRepositoryInterface allows mocking in tests.
@@ -109,16 +114,16 @@ type CreateLoanInput struct {
 // RequestLoan creates a new loan request (status = "zahtev").
 func (s *LoanService) RequestLoan(input CreateLoanInput) (*models.Loan, error) {
 	if !contains(models.ValidLoanTypes(), input.Vrsta) {
-		return nil, fmt.Errorf("invalid vrsta: %s", input.Vrsta)
+		return nil, fmt.Errorf("%w: invalid vrsta: %s", ErrInvalidInput, input.Vrsta)
 	}
 	if !contains(models.ValidInterestTypes(), input.TipKamate) {
-		return nil, fmt.Errorf("invalid tip kamate: %s", input.TipKamate)
+		return nil, fmt.Errorf("%w: invalid tip kamate: %s", ErrInvalidInput, input.TipKamate)
 	}
 	if input.Iznos <= 0 {
-		return nil, fmt.Errorf("iznos must be positive")
+		return nil, fmt.Errorf("%w: iznos must be positive", ErrInvalidInput)
 	}
 	if input.Period < 1 {
-		return nil, fmt.Errorf("period must be at least 1 month")
+		return nil, fmt.Errorf("%w: period must be at least 1 month", ErrInvalidInput)
 	}
 
 	base := BaseInterestRate(input.Iznos, input.TipKamate)
@@ -194,6 +199,11 @@ func (s *LoanService) RejectLoan(loanID, zaposleniID uint) (*models.Loan, error)
 		return nil, fmt.Errorf("failed to save loan: %w", err)
 	}
 	return loan, nil
+}
+
+// ListRequests returns all loans with status "zahtev" (for employee review).
+func (s *LoanService) ListRequests() ([]models.Loan, error) {
+	return s.loanRepo.ListByStatus("zahtev")
 }
 
 // ListByClient returns all loans for a client, sorted descending by amount.

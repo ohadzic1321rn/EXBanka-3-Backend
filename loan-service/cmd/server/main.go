@@ -10,7 +10,10 @@ import (
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/database"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/repository"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/service"
 )
 
 func main() {
@@ -28,10 +31,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	loanRepo := repository.NewLoanRepository(db)
+	installmentRepo := repository.NewInstallmentRepository(db)
+	loanSvc := service.NewLoanService(loanRepo, installmentRepo)
+	loanH := handler.NewLoanHandler(loanSvc)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthCheck)
-	// Loan handlers will be registered here in KREDIT-BE-4
-	_ = middleware.CORS // ensure middleware is used
+	mux.Handle("/api/v1/loans/", middleware.CORS(loanH))
 
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
