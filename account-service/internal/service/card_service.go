@@ -115,3 +115,87 @@ func (s *CardService) CreateCard(input CreateCardInput) (*models.Card, error) {
 
 	return card, nil
 }
+
+// ListByAccount returns all cards for a given account.
+func (s *CardService) ListByAccount(accountID uint) ([]models.Card, error) {
+	cards, err := s.cardRepo.ListByAccountID(accountID)
+	if err != nil {
+		return nil, err
+	}
+	if cards == nil {
+		return []models.Card{}, nil
+	}
+	return cards, nil
+}
+
+// ListByClient returns all cards belonging to a given client.
+func (s *CardService) ListByClient(clientID uint) ([]models.Card, error) {
+	cards, err := s.cardRepo.ListByClientID(clientID)
+	if err != nil {
+		return nil, err
+	}
+	if cards == nil {
+		return []models.Card{}, nil
+	}
+	return cards, nil
+}
+
+// BlockCard allows a client to block their own active card.
+func (s *CardService) BlockCard(cardID, clientID uint) (*models.Card, error) {
+	card, err := s.cardRepo.FindByID(cardID)
+	if err != nil {
+		return nil, fmt.Errorf("card not found: %w", err)
+	}
+	if card == nil {
+		return nil, errors.New("card not found")
+	}
+	if card.ClientID != clientID {
+		return nil, errors.New("card does not belong to this client")
+	}
+	if card.Status != "aktivna" {
+		return nil, fmt.Errorf("cannot block card with status %s: only aktivna cards can be blocked", card.Status)
+	}
+	card.Status = "blokirana"
+	if err := s.cardRepo.Save(card); err != nil {
+		return nil, fmt.Errorf("failed to save card: %w", err)
+	}
+	return card, nil
+}
+
+// UnblockCard allows an employee to unblock a blocked card.
+func (s *CardService) UnblockCard(cardID uint) (*models.Card, error) {
+	card, err := s.cardRepo.FindByID(cardID)
+	if err != nil {
+		return nil, fmt.Errorf("card not found: %w", err)
+	}
+	if card == nil {
+		return nil, errors.New("card not found")
+	}
+	if card.Status != "blokirana" {
+		return nil, fmt.Errorf("cannot unblock card with status %s: only blokirana cards can be unblocked", card.Status)
+	}
+	card.Status = "aktivna"
+	if err := s.cardRepo.Save(card); err != nil {
+		return nil, fmt.Errorf("failed to save card: %w", err)
+	}
+	return card, nil
+}
+
+// DeactivateCard permanently deactivates a card (employee action, irreversible).
+func (s *CardService) DeactivateCard(cardID uint) (*models.Card, error) {
+	card, err := s.cardRepo.FindByID(cardID)
+	if err != nil {
+		return nil, fmt.Errorf("card not found: %w", err)
+	}
+	if card == nil {
+		return nil, errors.New("card not found")
+	}
+	if card.Status == "deaktivirana" {
+		return nil, errors.New("card is already deactivated")
+	}
+	card.Status = "deaktivirana"
+	if err := s.cardRepo.Save(card); err != nil {
+		return nil, fmt.Errorf("failed to save card: %w", err)
+	}
+	return card, nil
+}
