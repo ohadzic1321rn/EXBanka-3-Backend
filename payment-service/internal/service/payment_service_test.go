@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/service"
@@ -338,6 +339,53 @@ func TestVerifyPayment_Success_UpdatesMesecnaPotrosnja(t *testing.T) {
 	}
 	if newMesecna != 5300 {
 		t.Errorf("expected mesecna_potrosnja=5300, got %f", newMesecna)
+	}
+}
+
+// --- TTL tests ---
+
+func TestVerifyPayment_ExpiredCode_ReturnsError(t *testing.T) {
+	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
+		1: rsdAccount(1, 5000, nil),
+	}}
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, _ := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: 1,
+		RacunPrimaocaBroj: "000000000000000098",
+		Iznos:             100,
+	})
+	// Simulate code created 6 minutes ago (past the 5-minute TTL)
+	created.CreatedAt = time.Now().Add(-6 * time.Minute)
+
+	_, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod)
+	if err == nil {
+		t.Fatal("expected expired code error, got nil")
+	}
+}
+
+func TestVerifyPayment_ExpiredCode_SetsStatusStornirano(t *testing.T) {
+	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
+		1: rsdAccount(1, 5000, nil),
+	}}
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, _ := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: 1,
+		RacunPrimaocaBroj: "000000000000000098",
+		Iznos:             100,
+	})
+	created.CreatedAt = time.Now().Add(-6 * time.Minute)
+
+	svc.VerifyPayment(created.ID, created.VerifikacioniKod)
+
+	if paymentRepo.saved == nil {
+		t.Fatal("expected payment to be saved after expiry")
+	}
+	if paymentRepo.saved.Status != "stornirano" {
+		t.Errorf("expected status=stornirano after expiry, got %s", paymentRepo.saved.Status)
 	}
 }
 

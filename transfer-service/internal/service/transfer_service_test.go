@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/service"
@@ -287,6 +288,7 @@ func TestVerifyTransfer_ValidCode_SetsStatusUspesno(t *testing.T) {
 	tr := &models.Transfer{
 		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
 		Iznos: 500, Status: "u_obradi", VerifikacioniKod: "111111",
+		CreatedAt: time.Now(),
 	}
 	accountRepo := newCaptureRepo(map[uint]*models.Account{
 		1: rsdAccount(1, 5000),
@@ -309,6 +311,7 @@ func TestVerifyTransfer_ValidCode_UpdatesSenderBalance(t *testing.T) {
 		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
 		Iznos: 500, Status: "u_obradi", VerifikacioniKod: "222222",
 		ValutaIznosa: "RSD", KonvertovaniIznos: 500,
+		CreatedAt: time.Now(),
 	}
 	accountRepo := newCaptureRepo(map[uint]*models.Account{
 		1: rsdAccount(1, 5000),
@@ -334,6 +337,7 @@ func TestVerifyTransfer_ValidCode_UpdatesSenderBalance(t *testing.T) {
 func TestVerifyTransfer_InvalidCode_ReturnsError(t *testing.T) {
 	tr := &models.Transfer{
 		ID: 1, Status: "u_obradi", VerifikacioniKod: "333333",
+		CreatedAt: time.Now(),
 	}
 	svc := service.NewTransferServiceWithRepos(
 		newCaptureRepo(map[uint]*models.Account{1: rsdAccount(1, 1000)}),
@@ -360,6 +364,46 @@ func TestVerifyTransfer_NonPendingTransfer_ReturnsError(t *testing.T) {
 	_, err := svc.VerifyTransfer(1, "444444")
 	if err == nil {
 		t.Fatal("expected error for non-pending transfer, got nil")
+	}
+}
+
+// --- TTL tests ---
+
+func TestVerifyTransfer_ExpiredCode_ReturnsError(t *testing.T) {
+	tr := &models.Transfer{
+		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
+		Iznos: 500, Status: "u_obradi", VerifikacioniKod: "777777",
+		CreatedAt: time.Now().Add(-6 * time.Minute), // 6 min ago → past TTL
+	}
+	svc := service.NewTransferServiceWithRepos(
+		newCaptureRepo(map[uint]*models.Account{1: rsdAccount(1, 1000), 2: rsdAccount(2, 0)}),
+		&mockTransferRepo{created: tr},
+		&mockExchangeRateService{},
+	)
+
+	_, err := svc.VerifyTransfer(1, "777777")
+	if err == nil {
+		t.Fatal("expected expired code error, got nil")
+	}
+}
+
+func TestVerifyTransfer_ExpiredCode_SetsStatusStornirano(t *testing.T) {
+	tr := &models.Transfer{
+		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
+		Iznos: 500, Status: "u_obradi", VerifikacioniKod: "888888",
+		CreatedAt: time.Now().Add(-6 * time.Minute),
+	}
+	transferRepo := &mockTransferRepo{created: tr}
+	svc := service.NewTransferServiceWithRepos(
+		newCaptureRepo(map[uint]*models.Account{1: rsdAccount(1, 1000), 2: rsdAccount(2, 0)}),
+		transferRepo,
+		&mockExchangeRateService{},
+	)
+
+	svc.VerifyTransfer(1, "888888")
+
+	if transferRepo.created == nil || transferRepo.created.Status != "stornirano" {
+		t.Errorf("expected transfer status=stornirano after expiry, got %v", transferRepo.created)
 	}
 }
 
@@ -486,6 +530,7 @@ func TestVerifyTransfer_UpdatesDnevnaPotrosnja(t *testing.T) {
 		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
 		Iznos: 500, KonvertovaniIznos: 500, ValutaIznosa: "RSD",
 		Status: "u_obradi", VerifikacioniKod: "555555",
+		CreatedAt: time.Now(),
 	}
 	accountRepo := newCaptureRepo(map[uint]*models.Account{1: sender, 2: rsdAccount(2, 0)})
 	svc := service.NewTransferServiceWithRepos(accountRepo, &mockTransferRepo{created: tr}, &mockExchangeRateService{})
@@ -512,6 +557,7 @@ func TestVerifyTransfer_UpdatesMesecnaPotrosnja(t *testing.T) {
 		ID: 1, RacunPosiljaocaID: 1, RacunPrimaocaID: 2,
 		Iznos: 500, KonvertovaniIznos: 500, ValutaIznosa: "RSD",
 		Status: "u_obradi", VerifikacioniKod: "666666",
+		CreatedAt: time.Now(),
 	}
 	accountRepo := newCaptureRepo(map[uint]*models.Account{1: sender, 2: rsdAccount(2, 0)})
 	svc := service.NewTransferServiceWithRepos(accountRepo, &mockTransferRepo{created: tr}, &mockExchangeRateService{})

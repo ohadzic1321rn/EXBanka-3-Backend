@@ -138,6 +138,12 @@ func (s *PaymentService) VerifyPayment(paymentID uint, verificationCode string) 
 		return nil, fmt.Errorf("payment is not pending: status=%s", payment.Status)
 	}
 
+	if time.Since(payment.CreatedAt) > 5*time.Minute {
+		payment.Status = "stornirano"
+		_ = s.paymentRepo.Save(payment)
+		return nil, fmt.Errorf("verification code expired")
+	}
+
 	if payment.VerifikacioniKod != verificationCode {
 		return nil, fmt.Errorf("invalid verification code")
 	}

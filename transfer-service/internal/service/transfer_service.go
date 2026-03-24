@@ -171,6 +171,12 @@ func (s *TransferService) VerifyTransfer(transferID uint, verificationCode strin
 		return nil, fmt.Errorf("transfer is not pending: status=%s", transfer.Status)
 	}
 
+	if time.Since(transfer.CreatedAt) > 5*time.Minute {
+		transfer.Status = "stornirano"
+		_ = s.transferRepo.Save(transfer)
+		return nil, fmt.Errorf("verification code expired")
+	}
+
 	if transfer.VerifikacioniKod != verificationCode {
 		return nil, fmt.Errorf("invalid verification code")
 	}
