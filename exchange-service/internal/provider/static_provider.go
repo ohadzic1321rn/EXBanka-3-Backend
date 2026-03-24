@@ -38,11 +38,20 @@ func (p *StaticRateProvider) GetRate(from, to string) (float64, error) {
 	return 0, errors.New("unknown currency pair")
 }
 
+// spread is the percentage applied symmetrically around the mid rate for buy/sell.
+const spread = 0.015 // 1.5%
+
 func (p *StaticRateProvider) GetAllRates() []service.ExchangeRate {
 	var result []service.ExchangeRate
 	for from, targets := range p.rates {
 		for to, rate := range targets {
-			result = append(result, service.ExchangeRate{From: from, To: to, Rate: rate})
+			result = append(result, service.ExchangeRate{
+				From:     from,
+				To:       to,
+				Rate:     rate,
+				BuyRate:  rate * (1 - spread),
+				SellRate: rate * (1 + spread),
+			})
 		}
 	}
 	return result

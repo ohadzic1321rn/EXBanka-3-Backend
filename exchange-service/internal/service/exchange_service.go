@@ -2,11 +2,15 @@ package service
 
 import "fmt"
 
-// ExchangeRate represents a single currency pair with its rate.
+// ExchangeRate represents a single currency pair with mid, buy, and sell rates.
+// BuyRate is the rate at which the bank buys foreign currency (lower than mid).
+// SellRate is the rate at which the bank sells foreign currency (higher than mid).
 type ExchangeRate struct {
-	From string
-	To   string
-	Rate float64
+	From     string
+	To       string
+	Rate     float64 // mid-market rate
+	BuyRate  float64 // bank buys foreign currency at this rate
+	SellRate float64 // bank sells foreign currency at this rate
 }
 
 // ExchangeResult holds the outcome of a currency conversion calculation.
