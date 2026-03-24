@@ -70,24 +70,10 @@ func (m *mockRecipientRepo) Delete(id uint) error {
 	return nil
 }
 
-// validAccountNumber returns a known-good 18-digit account number (mod 97 == 1).
+// validAccountNumber returns a valid 18-digit account number accepted by ValidateAccountNumber.
+// The payment-service validator requires: 18 digits, bank code (first 3) in {111,222,333,444}.
 func validAccountNumber() string {
-	// 000 + 1000000000000 + check digits so that full number mod 97 == 1
-	// Use "000100000000000097" — 000 + 1000000000000 + 97: 00010000000000009700 % 97 let me compute properly.
-	// The ValidateAccountNumber function checks: ParseUint(number) % 97 == 1
-	// Find n such that n % 97 == 1 and n is 18 digits.
-	// 100000000000000001 % 97:
-	// Use a known valid number from account-service tests: just return a valid one
-	// 000000000000000001 is not 18 digits valid. Let me just pick one:
-	// n = 100000000000000001 → len("100000000000000001") = 18, 100000000000000001 % 97 = ?
-	// 100000000000000001 = 97 * 1030927835051546 + 99 → not 1
-	// Let's use: start with 00010000000000000 (17 digits) + KK
-	// base = "000100000000000000" → n = 100000000000000 → mod 97
-	// This is getting complex, let's just use a hardcoded valid one.
-	// Valid: any number where n%97 == 1.
-	// Smallest 18-digit: 100000000000000001 %97 → need to check
-	// Better: use 97+1 = 98, pad to 18: "000000000000000098" → 98 % 97 = 1 ✓
-	return "000000000000000098"
+	return "111000000000000000"
 }
 
 // --- tests ---
