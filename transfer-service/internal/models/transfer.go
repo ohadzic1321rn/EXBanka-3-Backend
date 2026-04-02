@@ -9,6 +9,7 @@ type Transfer struct {
 	Iznos                 float64    `gorm:"not null" json:"iznos"`
 	ValutaIznosa          string     `json:"valuta_iznosa"`
 	KonvertovaniIznos     float64    `json:"konvertovani_iznos"`
+	IznosRSD              float64    `json:"iznos_rsd"`
 	Kurs                  float64    `json:"kurs"`
 	Provizija             float64    `json:"provizija"`
 	ProvizijaProcent      float64    `json:"provizija_procent"`

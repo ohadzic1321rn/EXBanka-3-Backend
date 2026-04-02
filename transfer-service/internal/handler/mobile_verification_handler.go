@@ -59,28 +59,17 @@ func (h *TransferMobileVerificationHandler) Approve(w http.ResponseWriter, r *ht
 		}
 	}
 
-	transfer, verificationCode, expiresAt, err := h.svc.ApproveTransferMobile(transferID, req.Mode)
+	transfer, _, _, err := h.svc.ApproveTransferMobile(transferID, req.Mode)
 	if err != nil {
 		h.writeVerificationError(w, err)
 		return
 	}
 
-	response := map[string]interface{}{
-		"id":     transfer.ID,
-		"status": transfer.Status,
-		"mode":   strings.ToLower(strings.TrimSpace(defaultTransferMode(req.Mode))),
-	}
-	if verificationCode != "" {
-		response["verificationCode"] = verificationCode
-		if expiresAt != nil {
-			response["expiresAt"] = expiresAt.UTC().Format(time.RFC3339)
-		}
-		response["message"] = "Verification code ready"
-	} else {
-		response["message"] = "Transfer confirmed successfully"
-	}
-
-	writeTransferJSON(w, http.StatusOK, response)
+	writeTransferJSON(w, http.StatusOK, map[string]interface{}{
+		"id":      transfer.ID,
+		"status":  transfer.Status,
+		"message": "Transfer confirmed successfully",
+	})
 }
 
 func (h *TransferMobileVerificationHandler) Reject(w http.ResponseWriter, r *http.Request) {
@@ -190,13 +179,6 @@ func (h *TransferMobileVerificationHandler) writeVerificationError(w http.Respon
 	}
 
 	writeTransferJSON(w, statusCode, response)
-}
-
-func defaultTransferMode(mode string) string {
-	if strings.TrimSpace(mode) == "" {
-		return "code"
-	}
-	return mode
 }
 
 func writeTransferJSON(w http.ResponseWriter, statusCode int, payload map[string]interface{}) {

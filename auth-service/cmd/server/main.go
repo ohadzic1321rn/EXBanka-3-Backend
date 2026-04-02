@@ -46,6 +46,10 @@ func main() {
 		slog.Error("Admin seeding failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedDefaultEmployees(db); err != nil {
+		slog.Error("Employee seeding failed", "error", err)
+		os.Exit(1)
+	}
 
 	notifSvc := infrasvc.NewNotificationService(cfg)
 	authH := handler.NewAuthHandler(cfg, db, notifSvc)

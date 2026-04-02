@@ -47,12 +47,13 @@ func (r *AccountRepository) UpdateFieldsTx(tx *gorm.DB, id uint, fields map[stri
 }
 
 // FindBankAccountByCurrency returns the bank's own account for the given currency code.
-// Bank accounts are identified by having firma_id set and client_id NULL.
+// Bank accounts are identified by having firma_id set and client_id NULL, and the firma must not be a state entity.
 func (r *AccountRepository) FindBankAccountByCurrency(currencyKod string) (*models.Account, error) {
 	var account models.Account
 	err := r.db.
 		Joins("JOIN currencies ON currencies.id = accounts.currency_id").
-		Where("currencies.kod = ? AND accounts.firma_id IS NOT NULL AND accounts.client_id IS NULL", currencyKod).
+		Joins("JOIN firmas ON firmas.id = accounts.firma_id").
+		Where("currencies.kod = ? AND accounts.firma_id IS NOT NULL AND accounts.client_id IS NULL AND firmas.is_state = false", currencyKod).
 		Preload("Currency").
 		First(&account).Error
 	if err != nil {
@@ -66,7 +67,8 @@ func (r *AccountRepository) FindBankAccountByCurrencyForUpdate(tx *gorm.DB, curr
 	var id uint
 	if err := tx.Table("accounts").
 		Joins("JOIN currencies ON currencies.id = accounts.currency_id").
-		Where("currencies.kod = ? AND accounts.firma_id IS NOT NULL AND accounts.client_id IS NULL", currencyKod).
+		Joins("JOIN firmas ON firmas.id = accounts.firma_id").
+		Where("currencies.kod = ? AND accounts.firma_id IS NOT NULL AND accounts.client_id IS NULL AND firmas.is_state = false", currencyKod).
 		Pluck("accounts.id", &id).Error; err != nil {
 		return nil, err
 	}

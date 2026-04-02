@@ -17,8 +17,6 @@ const (
 	transferStatusCompleted = "uspesno"
 	transferStatusCancelled = "stornirano"
 
-	verificationCodeTTL            = 5 * time.Minute
-	maxVerificationAttempts        = 3
 	crossCurrencyCommissionPercent = 0.5
 )
 
@@ -71,6 +69,7 @@ type TransferPreview struct {
 	Iznos             float64
 	ValutaIznosa      string
 	KonvertovaniIznos float64
+	IznosRSD          float64
 	Kurs              float64
 	Provizija         float64
 	ProvizijaProcent  float64
@@ -142,6 +141,7 @@ func (s *TransferService) CreateTransfer(input CreateTransferInput) (*models.Tra
 		Iznos:             input.Iznos,
 		ValutaIznosa:      preview.ValutaIznosa,
 		KonvertovaniIznos: preview.KonvertovaniIznos,
+		IznosRSD:          preview.IznosRSD,
 		Kurs:              preview.Kurs,
 		Provizija:         preview.Provizija,
 		ProvizijaProcent:  preview.ProvizijaProcent,
@@ -157,52 +157,31 @@ func (s *TransferService) CreateTransfer(input CreateTransferInput) (*models.Tra
 	return transfer, nil
 }
 
-func (s *TransferService) VerifyTransfer(transferID uint, verificationCode string) (*models.Transfer, error) {
-	transfer, err := s.transferRepo.FindByID(transferID)
+// CreateAndSettleTransfer creates a transfer and immediately settles it,
+// updating all account balances in a single operation with no pending state.
+func (s *TransferService) CreateAndSettleTransfer(input CreateTransferInput) (*models.Transfer, error) {
+	preview, _, _, err := s.prepareTransfer(input)
 	if err != nil {
-		return nil, fmt.Errorf("transfer not found: %w", err)
+		return nil, err
 	}
 
-	if transfer.Status != transferStatusPending {
-		return nil, &TransferVerificationError{
-			Code:    "transfer_not_pending",
-			Message: fmt.Sprintf("transfer is not pending: status=%s", transfer.Status),
-			Status:  transfer.Status,
-		}
+	transfer := &models.Transfer{
+		RacunPosiljaocaID: input.RacunPosiljaocaID,
+		RacunPrimaocaID:   input.RacunPrimaocaID,
+		Iznos:             input.Iznos,
+		ValutaIznosa:      preview.ValutaIznosa,
+		KonvertovaniIznos: preview.KonvertovaniIznos,
+		IznosRSD:          preview.IznosRSD,
+		Kurs:              preview.Kurs,
+		Provizija:         preview.Provizija,
+		ProvizijaProcent:  preview.ProvizijaProcent,
+		Svrha:             input.Svrha,
+		Status:            transferStatusPending,
+		VremeTransakcije:  time.Now().UTC(),
 	}
 
-	expiresAt := transfer.CreatedAt.Add(verificationCodeTTL)
-	if transfer.VerificationExpiresAt != nil {
-		expiresAt = transfer.VerificationExpiresAt.UTC()
-	}
-	if time.Now().UTC().After(expiresAt) {
-		s.cancelTransfer(transfer)
-		return nil, &TransferVerificationError{
-			Code:    "verification_code_expired",
-			Message: "verification code expired",
-			Status:  transferStatusCancelled,
-		}
-	}
-
-	if transfer.VerifikacioniKod != strings.TrimSpace(verificationCode) {
-		transfer.BrojPokusaja++
-		attemptsRemaining := maxVerificationAttempts - transfer.BrojPokusaja
-		if transfer.BrojPokusaja >= maxVerificationAttempts {
-			s.cancelTransfer(transfer)
-			return nil, &TransferVerificationError{
-				Code:              "verification_attempts_exceeded",
-				Message:           "maximum verification attempts exceeded, transfer cancelled",
-				Status:            transferStatusCancelled,
-				AttemptsRemaining: 0,
-			}
-		}
-		_ = s.transferRepo.Save(transfer)
-		return nil, &TransferVerificationError{
-			Code:              "invalid_verification_code",
-			Message:           "invalid verification code",
-			Status:            transferStatusPending,
-			AttemptsRemaining: attemptsRemaining,
-		}
+	if err := s.transferRepo.Create(transfer); err != nil {
+		return nil, fmt.Errorf("failed to save transfer: %w", err)
 	}
 
 	return s.settleTransfer(transfer)
@@ -296,6 +275,23 @@ func (s *TransferService) settleTransfer(transfer *models.Transfer) (*models.Tra
 				"raspolozivo_stanje": bankFrom.RaspolozivoStanje + ukupnoZaSkidanje,
 			}); err != nil {
 				return fmt.Errorf("failed to update bank from-currency account: %w", err)
+			}
+			// For non-RSD→non-RSD transfers (e.g. EUR→USD) the money routes through
+			// the bank's RSD account as an intermediate step. Commission is charged on
+			// the RSD amount; the remainder is credited to the bank's RSD account as
+			// profit from the second conversion step.
+			if transfer.IznosRSD > 0 {
+				bankRSD, err := s.accountRepo.FindBankAccountByCurrencyForUpdate(tx, "RSD")
+				if err != nil {
+					return fmt.Errorf("bank account for RSD not found: %w", err)
+				}
+				commission2InRSD := math.Round(transfer.IznosRSD*crossCurrencyCommissionPercent) / 100
+				if err := s.accountRepo.UpdateFieldsTx(tx, bankRSD.ID, map[string]interface{}{
+					"stanje":             bankRSD.Stanje + commission2InRSD,
+					"raspolozivo_stanje": bankRSD.RaspolozivoStanje + commission2InRSD,
+				}); err != nil {
+					return fmt.Errorf("failed to update bank RSD account: %w", err)
+				}
 			}
 			if err := s.accountRepo.UpdateFieldsTx(tx, bankTo.ID, map[string]interface{}{
 				"stanje":             bankTo.Stanje - transfer.KonvertovaniIznos,
@@ -410,6 +406,22 @@ func (s *TransferService) settleTransferNonTx(transfer *models.Transfer) (*model
 		}); err != nil {
 			return nil, fmt.Errorf("failed to update bank from-currency account: %w", err)
 		}
+		// For non-RSD→non-RSD transfers (e.g. EUR→USD) the money routes through
+		// the bank's RSD account as an intermediate step. Commission is charged on
+		// the RSD amount; the net commission stays in the bank's RSD account.
+		if transfer.IznosRSD > 0 {
+			bankRSD, err := s.accountRepo.FindBankAccountByCurrency("RSD")
+			if err != nil {
+				return nil, fmt.Errorf("bank account for RSD not found: %w", err)
+			}
+			commission2InRSD := math.Round(transfer.IznosRSD*crossCurrencyCommissionPercent) / 100
+			if err := s.accountRepo.UpdateFields(bankRSD.ID, map[string]interface{}{
+				"stanje":             bankRSD.Stanje + commission2InRSD,
+				"raspolozivo_stanje": bankRSD.RaspolozivoStanje + commission2InRSD,
+			}); err != nil {
+				return nil, fmt.Errorf("failed to update bank RSD account: %w", err)
+			}
+		}
 		if err := s.accountRepo.UpdateFields(bankTo.ID, map[string]interface{}{
 			"stanje":             bankTo.Stanje - transfer.KonvertovaniIznos,
 			"raspolozivo_stanje": bankTo.RaspolozivoStanje - transfer.KonvertovaniIznos,
@@ -438,6 +450,14 @@ func (s *TransferService) settleTransferNonTx(transfer *models.Transfer) (*model
 func (s *TransferService) ApproveTransferMobile(transferID uint, mode string) (*models.Transfer, string, *time.Time, error) {
 	transfer, err := s.pendingTransferForMobile(transferID)
 	if err != nil {
+		// If the transfer is already completed (settled immediately on creation),
+		// treat the confirm step as a success rather than returning an error.
+		var verr *TransferVerificationError
+		if errors.As(err, &verr) && verr.Code == "transfer_not_pending" && verr.Status == transferStatusCompleted {
+			if settled, fetchErr := s.transferRepo.FindByID(transferID); fetchErr == nil {
+				return settled, "", nil, nil
+			}
+		}
 		return nil, "", nil, err
 	}
 
@@ -505,6 +525,7 @@ func (s *TransferService) prepareTransfer(input CreateTransferInput) (*TransferP
 	valutaIznosa := sender.Currency.Kod
 	provizijaProcent := 0.0
 	provizija := 0.0
+	iznosRSD := 0.0
 
 	if sender.CurrencyID != receiver.CurrencyID {
 		var rsdAmount float64
@@ -525,7 +546,12 @@ func (s *TransferService) prepareTransfer(input CreateTransferInput) (*TransferP
 			if err2 != nil {
 				return nil, nil, nil, fmt.Errorf("failed to get exchange rate RSD→%s: %w", receiver.Currency.Kod, err2)
 			}
-			konvertovaniIznos = math.Round(rsdAmount*kursFromRSD*100) / 100
+			// Commission is charged at each step. For non-RSD→non-RSD transfers the
+			// intermediate RSD amount is subject to an additional commission before
+			// being converted to the destination currency.
+			iznosRSD = rsdAmount
+			commission2InRSD := math.Round(rsdAmount*crossCurrencyCommissionPercent) / 100
+			konvertovaniIznos = math.Round((rsdAmount-commission2InRSD)*kursFromRSD*100) / 100
 			if input.Iznos > 0 {
 				kurs = konvertovaniIznos / input.Iznos
 			}
@@ -546,31 +572,12 @@ func (s *TransferService) prepareTransfer(input CreateTransferInput) (*TransferP
 		Iznos:             input.Iznos,
 		ValutaIznosa:      valutaIznosa,
 		KonvertovaniIznos: konvertovaniIznos,
+		IznosRSD:          iznosRSD,
 		Kurs:              kurs,
 		Provizija:         provizija,
 		ProvizijaProcent:  provizijaProcent,
 		Svrha:             input.Svrha,
 	}, sender, receiver, nil
-}
-
-func (s *TransferService) sendVerificationCode(sender *models.Account, transfer *models.Transfer) error {
-	if s.notifier == nil {
-		return nil
-	}
-	if sender.Client == nil || strings.TrimSpace(sender.Client.Email) == "" {
-		return fmt.Errorf("failed to deliver verification code: sender email not found")
-	}
-
-	fullName := strings.TrimSpace(strings.TrimSpace(sender.Client.Ime) + " " + strings.TrimSpace(sender.Client.Prezime))
-	if fullName == "" {
-		fullName = sender.Client.Email
-	}
-
-	if err := s.notifier.SendTransferVerificationCode(sender.Client.Email, fullName, transfer); err != nil {
-		return fmt.Errorf("failed to deliver verification code: %w", err)
-	}
-
-	return nil
 }
 
 func (s *TransferService) pendingTransferForMobile(transferID uint) (*models.Transfer, error) {

@@ -18,7 +18,6 @@ import (
 type mockTransferSvc struct {
 	created         *models.Transfer
 	createErr       error
-	verifyErr       error
 	byAccountResult []models.Transfer
 	byAccountTotal  int64
 	byClientResult  []models.Transfer
@@ -29,16 +28,6 @@ type mockTransferSvc struct {
 func (m *mockTransferSvc) CreateTransfer(input service.CreateTransferInput) (*models.Transfer, error) {
 	if m.createErr != nil {
 		return nil, m.createErr
-	}
-	return m.created, nil
-}
-
-func (m *mockTransferSvc) VerifyTransfer(_ uint, _ string) (*models.Transfer, error) {
-	if m.verifyErr != nil {
-		return nil, m.verifyErr
-	}
-	if m.created != nil {
-		m.created.Status = "uspesno"
 	}
 	return m.created, nil
 }

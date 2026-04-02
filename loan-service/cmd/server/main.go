@@ -32,6 +32,10 @@ func main() {
 		slog.Error("DB migration failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedClientLoans(db); err != nil {
+		slog.Error("Client loans seed failed", "error", err)
+		os.Exit(1)
+	}
 
 	loanRepo := repository.NewLoanRepository(db)
 	installmentRepo := repository.NewInstallmentRepository(db)

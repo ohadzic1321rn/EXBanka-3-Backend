@@ -100,3 +100,63 @@ func SeedDefaultAdmin(db *gorm.DB) error {
 	slog.Info("Default admin user created successfully")
 	return nil
 }
+
+// SeedDefaultEmployees seeds two default bank employees if they don't already exist.
+func SeedDefaultEmployees(db *gorm.DB) error {
+	type empSpec struct {
+		ime, prezime, email, username, pozicija, departman, perm string
+	}
+	specs := []empSpec{
+		{"Marko", "Petrovic", "marko.petrovic@bank.com", "marko.petrovic", "Referent", "Retail", models.PermEmployeeBasic},
+		{"Ana", "Jovic", "ana.jovic@bank.com", "ana.jovic", "Agent", "Retail", models.PermEmployeeAgent},
+	}
+
+	const defaultPassword = "Zaposleni123!"
+
+	for _, s := range specs {
+		var existing models.Employee
+		if err := db.Where("email = ?", s.email).First(&existing).Error; err == nil {
+			slog.Info("Employee already exists, skipping", "email", s.email)
+			continue
+		}
+
+		salt, err := util.GenerateSalt()
+		if err != nil {
+			return fmt.Errorf("failed to generate salt for %s: %w", s.email, err)
+		}
+		hashedPwd, err := util.HashPassword(defaultPassword, salt)
+		if err != nil {
+			return fmt.Errorf("failed to hash password for %s: %w", s.email, err)
+		}
+
+		var perm models.Permission
+		if err := db.Where("name = ?", s.perm).First(&perm).Error; err != nil {
+			return fmt.Errorf("permission %s not found: %w", s.perm, err)
+		}
+
+		emp := models.Employee{
+			Ime:           s.ime,
+			Prezime:       s.prezime,
+			DatumRodjenja: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
+			Pol:           "M",
+			Email:         s.email,
+			BrojTelefona:  "0601234567",
+			Adresa:        "Beograd",
+			Username:      s.username,
+			Password:      hashedPwd,
+			SaltPassword:  salt,
+			Pozicija:      s.pozicija,
+			Departman:     s.departman,
+			Aktivan:       true,
+			Permissions:   []models.Permission{perm},
+		}
+
+		if err := db.Create(&emp).Error; err != nil {
+			return fmt.Errorf("failed to create employee %s: %w", s.email, err)
+		}
+		slog.Info("Employee created", "email", s.email)
+	}
+
+	slog.Info("Default employees seed complete")
+	return nil
+}

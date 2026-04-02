@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
@@ -134,6 +135,77 @@ func SeedStateAccounts(db *gorm.DB) error {
 	}
 
 	slog.Info("State accounts seed complete")
+	return nil
+}
+
+// SeedClientAccounts creates one tekuci (RSD) and one devizni (EUR) account for each
+// of the three default test clients. Idempotent — safe to call on every restart.
+func SeedClientAccounts(db *gorm.DB) error {
+	clientEmails := []string{
+		"klijent@bank.com",
+		"jelena.nikolic@bank.com",
+		"nikola.djordjevic@bank.com",
+	}
+
+	var rsd, eur models.Currency
+	if err := db.Where("kod = ?", "RSD").First(&rsd).Error; err != nil {
+		slog.Warn("RSD currency not found, skipping client accounts")
+		return nil
+	}
+	if err := db.Where("kod = ?", "EUR").First(&eur).Error; err != nil {
+		slog.Warn("EUR currency not found, skipping client accounts")
+		return nil
+	}
+
+	for _, email := range clientEmails {
+		var client models.Client
+		if err := db.Where("email = ?", email).First(&client).Error; err != nil {
+			slog.Warn("Client not found, skipping accounts", "email", email)
+			continue
+		}
+
+		// Tekuci RSD
+		var existingTekuci models.Account
+		if err := db.Where("client_id = ? AND tip = ? AND currency_id = ?", client.ID, "tekuci", rsd.ID).First(&existingTekuci).Error; err == gorm.ErrRecordNotFound {
+			acc := models.Account{
+				BrojRacuna:        util.GenerateAccountNumber("tekuci", "licni"),
+				ClientID:          &client.ID,
+				CurrencyID:        rsd.ID,
+				Tip:               "tekuci",
+				Vrsta:             "licni",
+				Naziv:             client.Ime + " " + client.Prezime + " — RSD",
+				Status:            "aktivan",
+				Stanje:            100_000,
+				RaspolozivoStanje: 100_000,
+			}
+			if err := db.Create(&acc).Error; err != nil {
+				return fmt.Errorf("failed to create tekuci account for %s: %w", email, err)
+			}
+			slog.Info("Seeded tekuci account", "client", email, "broj", acc.BrojRacuna)
+		}
+
+		// Devizni EUR
+		var existingDevizni models.Account
+		if err := db.Where("client_id = ? AND tip = ? AND currency_id = ?", client.ID, "devizni", eur.ID).First(&existingDevizni).Error; err == gorm.ErrRecordNotFound {
+			acc := models.Account{
+				BrojRacuna:        util.GenerateAccountNumber("devizni", "licni"),
+				ClientID:          &client.ID,
+				CurrencyID:        eur.ID,
+				Tip:               "devizni",
+				Vrsta:             "licni",
+				Naziv:             client.Ime + " " + client.Prezime + " — EUR",
+				Status:            "aktivan",
+				Stanje:            1_000,
+				RaspolozivoStanje: 1_000,
+			}
+			if err := db.Create(&acc).Error; err != nil {
+				return fmt.Errorf("failed to create devizni account for %s: %w", email, err)
+			}
+			slog.Info("Seeded devizni account", "client", email, "broj", acc.BrojRacuna)
+		}
+	}
+
+	slog.Info("Client accounts seed complete")
 	return nil
 }
 

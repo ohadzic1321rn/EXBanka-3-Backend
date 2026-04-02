@@ -45,6 +45,10 @@ func main() {
 		slog.Error("Default client seed failed", "error", err)
 		os.Exit(1)
 	}
+	if err := database.SeedExtraClients(db); err != nil {
+		slog.Error("Extra clients seed failed", "error", err)
+		os.Exit(1)
+	}
 
 	clientH := handler.NewClientHandler(cfg, db)
 

@@ -15,7 +15,7 @@ import (
 )
 
 type transferHTTPService interface {
-	CreateTransfer(input service.CreateTransferInput) (*models.Transfer, error)
+	CreateAndSettleTransfer(input service.CreateTransferInput) (*models.Transfer, error)
 	PreviewTransfer(input service.CreateTransferInput) (*service.TransferPreview, error)
 	ListTransfersByAccount(accountID uint, filter models.TransferFilter) ([]models.Transfer, int64, error)
 	ListTransfersByClient(clientID uint, filter models.TransferFilter) ([]models.Transfer, int64, error)
@@ -94,7 +94,7 @@ func (h *TransferHTTPHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transfer, err := h.svc.CreateTransfer(input)
+	transfer, err := h.svc.CreateAndSettleTransfer(input)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"message": err.Error(),
