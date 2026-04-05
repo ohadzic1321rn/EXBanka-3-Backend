@@ -225,6 +225,50 @@ func (s *OrderService) DeclineOrder(orderID, supervisorID uint) error {
 	return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
 }
 
+// CancelOrder cancels the unfilled portion of an active order.
+//
+// newRemaining == 0  → full cancel: is_done=true, status="cancelled"
+// newRemaining  > 0  → partial cancel: reduce remaining_portions, keep status
+//
+// The value of the cancelled quantity is refunded to the order's account.
+func (s *OrderService) CancelOrder(orderID, requesterID uint, newRemaining int64) error {
+	order, err := s.orderRepo.GetOrderByID(orderID)
+	if err != nil {
+		return fmt.Errorf("failed to load order: %w", err)
+	}
+	if order == nil {
+		return fmt.Errorf("order not found")
+	}
+	if order.IsDone {
+		return fmt.Errorf("order is already done and cannot be cancelled")
+	}
+	if newRemaining < 0 || newRemaining >= order.RemainingPortions {
+		return fmt.Errorf("newRemaining must be between 0 and %d (exclusive)", order.RemainingPortions)
+	}
+
+	cancelledQty := order.RemainingPortions - newRemaining
+	refundAmount := round2(float64(cancelledQty) * float64(order.ContractSize) * order.PricePerUnit)
+
+	if newRemaining == 0 {
+		// Full cancel.
+		if err := s.orderRepo.FullCancelOrder(orderID); err != nil {
+			return fmt.Errorf("failed to cancel order: %w", err)
+		}
+	} else {
+		// Partial cancel: just trim remaining_portions.
+		if err := s.orderRepo.SetRemainingPortions(orderID, newRemaining); err != nil {
+			return fmt.Errorf("failed to update remaining portions: %w", err)
+		}
+	}
+
+	// Refund the cancelled portion back to the account.
+	if err := s.orderRepo.RefundToAccount(order.AccountID, refundAmount); err != nil {
+		return fmt.Errorf("failed to refund account: %w", err)
+	}
+
+	return nil
+}
+
 // isSettlementExpired returns true when the listing is a futures or options
 // contract whose settlement date has already passed.
 func (s *OrderService) isSettlementExpired(assetID uint) (bool, error) {

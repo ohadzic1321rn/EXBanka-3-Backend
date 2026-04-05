@@ -138,6 +138,31 @@ func (r *OrderRepository) IncrementUsedLimit(employeeID uint, delta float64) err
 		UpdateColumn("used_limit", gorm.Expr("used_limit + ?", delta)).Error
 }
 
+// FullCancelOrder marks an order as cancelled and fully done.
+func (r *OrderRepository) FullCancelOrder(id uint) error {
+	return r.db.Model(&models.OrderRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":             "cancelled",
+		"is_done":            true,
+		"remaining_portions": 0,
+		"last_modification":  time.Now().UTC(),
+	}).Error
+}
+
+// SetRemainingPortions updates remaining_portions for a partial cancel.
+func (r *OrderRepository) SetRemainingPortions(id uint, newRemaining int64) error {
+	return r.db.Model(&models.OrderRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"remaining_portions": newRemaining,
+		"last_modification":  time.Now().UTC(),
+	}).Error
+}
+
+// RefundToAccount adds the refund amount back to the account's available balance.
+func (r *OrderRepository) RefundToAccount(accountID uint, amount float64) error {
+	return r.db.Table("accounts").
+		Where("id = ?", accountID).
+		UpdateColumn("raspolozivo_stanje", gorm.Expr("raspolozivo_stanje + ?", amount)).Error
+}
+
 // GetSettlementDate returns the settlement date for a futures or options listing,
 // or nil if the asset type has no settlement date (stocks, forex).
 func (r *OrderRepository) GetSettlementDate(assetID uint) (*time.Time, error) {
