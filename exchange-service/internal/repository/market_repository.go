@@ -166,6 +166,33 @@ func (r *MarketRepository) GetOptionByListingID(listingID uint) (*models.OptionR
 	return &record, nil
 }
 
+// GetForexRate returns the current exchange rate from baseCurrency to quoteCurrency
+// by looking up the corresponding forex pair listing price.
+// Returns 0, nil when no matching pair exists in the database.
+func (r *MarketRepository) GetForexRate(baseCurrency, quoteCurrency string) (float64, error) {
+	// Direct pair: base→quote
+	row := r.db.Table("forex_pairs").
+		Select("market_listings.price").
+		Joins("JOIN market_listings ON market_listings.id = forex_pairs.listing_id").
+		Where("forex_pairs.base_currency = ? AND forex_pairs.quote_currency = ?", baseCurrency, quoteCurrency).
+		Limit(1).Row()
+	var price float64
+	if err := row.Scan(&price); err == nil && price > 0 {
+		return price, nil
+	}
+	// Inverse pair: quote→base (1/price)
+	row2 := r.db.Table("forex_pairs").
+		Select("market_listings.price").
+		Joins("JOIN market_listings ON market_listings.id = forex_pairs.listing_id").
+		Where("forex_pairs.base_currency = ? AND forex_pairs.quote_currency = ?", quoteCurrency, baseCurrency).
+		Limit(1).Row()
+	var invPrice float64
+	if err := row2.Scan(&invPrice); err == nil && invPrice > 0 {
+		return 1.0 / invPrice, nil
+	}
+	return 0, nil // no pair found
+}
+
 func (r *MarketRepository) GetListingRecordByTicker(ticker string) (*models.MarketListingRecord, error) {
 	var record models.MarketListingRecord
 	if err := r.db.Preload("Exchange").Where("ticker = ?", ticker).First(&record).Error; err != nil {

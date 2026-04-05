@@ -12,26 +12,24 @@ import (
 // optionContractSize is the number of underlying shares per option contract.
 const optionContractSize = 100
 
-const capitalGainsTaxRate = 0.15
-
 // PortfolioService maintains PortfolioHoldingRecords in response to order fills
 // and exposes P&L views over the live holdings.
 type PortfolioService struct {
 	portfolioRepo *repository.PortfolioRepository
-	taxRepo       *repository.TaxRepository
+	taxSvc        *TaxService
 	marketRepo    *repository.MarketRepository
 	orderRepo     *repository.OrderRepository
 }
 
 func NewPortfolioService(
 	portfolioRepo *repository.PortfolioRepository,
-	taxRepo *repository.TaxRepository,
+	taxSvc *TaxService,
 	marketRepo *repository.MarketRepository,
 	orderRepo *repository.OrderRepository,
 ) *PortfolioService {
 	return &PortfolioService{
 		portfolioRepo: portfolioRepo,
-		taxRepo:       taxRepo,
+		taxSvc:        taxSvc,
 		marketRepo:    marketRepo,
 		orderRepo:     orderRepo,
 	}
@@ -75,29 +73,16 @@ func (s *PortfolioService) RecordFill(order *models.OrderRecord, fillQty int64, 
 		return fmt.Errorf("portfolio: failed to record sell fill for order %d: %w", order.ID, err)
 	}
 
-	// Create a TaxRecord for any capital gain.
-	// profit_rsd and tax_rsd store the profit in the asset's native currency;
-	// Phase 7 (TaxService) applies the RSD conversion before collection.
-	if realizedProfit > 0 {
-		tax := realizedProfit * capitalGainsTaxRate
-		now := time.Now().UTC()
-		record := &models.TaxRecord{
-			UserID:    order.UserID,
-			UserType:  order.UserType,
-			AssetID:   order.AssetID,
-			Period:    now.Format("2006-01"),
-			ProfitRSD: roundPnL(realizedProfit),
-			TaxRSD:    roundPnL(tax),
-			Status:    "unpaid",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := s.taxRepo.CreateTaxRecord(record); err != nil {
-			// Non-fatal: tax record failure should not block the fill.
-			// Phase 7 cron can reconcile from realized_profit on the holding.
-			_ = err
-		}
-	}
+	// Delegate tax recording to TaxService which handles RSD conversion.
+	// Non-fatal: tax failure does not block the fill.
+	_ = s.taxSvc.RecordCapitalGainTax(
+		order.UserID,
+		order.UserType,
+		order.AssetID,
+		realizedProfit,
+		order.Asset.Type,
+		order.Asset.Exchange.Currency,
+	)
 
 	return nil
 }
@@ -277,22 +262,15 @@ func (s *PortfolioService) ExerciseOption(holdingID, actuaryID uint) error {
 		return fmt.Errorf("failed to close option holding: %w", err)
 	}
 
-	// 10. Create a TaxRecord for the exercise profit if positive.
-	if exerciseProfit > 0 {
-		tax := roundPnL(exerciseProfit * capitalGainsTaxRate)
-		taxRecord := &models.TaxRecord{
-			UserID:    holding.UserID,
-			UserType:  holding.UserType,
-			AssetID:   holding.AssetID,
-			Period:    now.Format("2006-01"),
-			ProfitRSD: exerciseProfit,
-			TaxRSD:    tax,
-			Status:    "unpaid",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		_ = s.taxRepo.CreateTaxRecord(taxRecord) // non-fatal
-	}
+	// 10. Create a TaxRecord for the exercise profit via TaxService (handles RSD conversion).
+	_ = s.taxSvc.RecordCapitalGainTax(
+		holding.UserID,
+		holding.UserType,
+		holding.AssetID,
+		exerciseProfit,
+		"option",
+		underlying.Exchange.Currency,
+	)
 
 	return nil
 }

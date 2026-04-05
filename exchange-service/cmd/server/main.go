@@ -42,9 +42,11 @@ func main() {
 	// Build shared repos and services before starting cron so they're reusable.
 	marketRepo := repository.NewMarketRepository(db)
 	orderRepo := repository.NewOrderRepository(db)
+	taxRepo := repository.NewTaxRepository(db)
+	taxSvc := service.NewTaxService(taxRepo, marketRepo)
 	portfolioSvc := service.NewPortfolioService(
 		repository.NewPortfolioRepository(db),
-		repository.NewTaxRepository(db),
+		taxSvc,
 		marketRepo,
 		orderRepo,
 	)
