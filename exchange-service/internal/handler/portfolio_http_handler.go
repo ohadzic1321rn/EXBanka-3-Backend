@@ -1,0 +1,305 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/util"
+)
+
+type PortfolioHTTPHandler struct {
+	cfg          *config.Config
+	portfolioSvc *service.PortfolioService
+}
+
+func NewPortfolioHTTPHandler(cfg *config.Config, portfolioSvc *service.PortfolioService) *PortfolioHTTPHandler {
+	return &PortfolioHTTPHandler{cfg: cfg, portfolioSvc: portfolioSvc}
+}
+
+// PortfolioCollection handles GET /api/v1/portfolio — summary view.
+func (h *PortfolioHTTPHandler) PortfolioCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	userID, userType := callerIdentity(claims)
+	holdings, err := h.portfolioSvc.ListHoldingsWithPnL(userID, userType)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load portfolio"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"portfolio": buildPortfolioSummary(userID, userType, holdings),
+	})
+}
+
+// PortfolioRoutes handles /api/v1/portfolio/* sub-paths.
+func (h *PortfolioHTTPHandler) PortfolioRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/portfolio/"), "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+
+	// /api/v1/portfolio/holdings
+	if parts[0] != "holdings" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if len(parts) == 1 {
+		// GET /api/v1/portfolio/holdings
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.listHoldings(w, r)
+		return
+	}
+
+	idStr := parts[1]
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid holding id"})
+		return
+	}
+	holdingID := uint(id)
+
+	if len(parts) == 2 {
+		// GET /api/v1/portfolio/holdings/{id}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.getHolding(w, r, holdingID)
+		return
+	}
+
+	sub := parts[2]
+	switch {
+	case sub == "exercise" && r.Method == http.MethodPost:
+		h.exerciseOption(w, r, holdingID)
+	case sub == "public" && r.Method == http.MethodPut:
+		h.setPublic(w, r, holdingID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// --- handlers ---
+
+func (h *PortfolioHTTPHandler) listHoldings(w http.ResponseWriter, r *http.Request) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	userID, userType := callerIdentity(claims)
+	holdings, err := h.portfolioSvc.ListHoldingsWithPnL(userID, userType)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load holdings"})
+		return
+	}
+
+	items := make([]holdingResponse, 0, len(holdings))
+	for _, h := range holdings {
+		items = append(items, holdingToResponse(h))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"holdings": items,
+		"count":    len(items),
+	})
+}
+
+func (h *PortfolioHTTPHandler) getHolding(w http.ResponseWriter, r *http.Request, holdingID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+
+	pnl, err := h.portfolioSvc.GetHoldingWithPnL(holdingID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "holding not found"})
+		return
+	}
+
+	if !isSupervisor(claims) && !isHoldingOwner(claims, pnl.Holding) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "access denied"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"holding": holdingToResponse(*pnl)})
+}
+
+func (h *PortfolioHTTPHandler) exerciseOption(w http.ResponseWriter, r *http.Request, holdingID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	// Actuary (agent or supervisor) only.
+	if !util.HasPermission(claims, models.PermEmployeeAgent) || claims.TokenSource != "employee" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "actuary access required"})
+		return
+	}
+
+	if err := h.portfolioSvc.ExerciseOption(holdingID, claims.EmployeeID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "option exercised successfully"})
+}
+
+func (h *PortfolioHTTPHandler) setPublic(w http.ResponseWriter, r *http.Request, holdingID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+
+	holding, err := h.portfolioSvc.GetHoldingByID(holdingID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "holding not found"})
+		return
+	}
+	if !isHoldingOwner(claims, holding) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "access denied"})
+		return
+	}
+
+	var body struct {
+		IsPublic bool `json:"isPublic"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+
+	if err := h.portfolioSvc.SetPublic(holdingID, body.IsPublic); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to update holding"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"holdingId": holdingID,
+		"isPublic":  body.IsPublic,
+	})
+}
+
+// --- helpers ---
+
+func isHoldingOwner(claims *util.Claims, h *models.PortfolioHoldingRecord) bool {
+	uid, utype := callerIdentity(claims)
+	return h.UserType == utype && h.UserID == uid
+}
+
+// --- response types ---
+
+type holdingResponse struct {
+	ID               uint    `json:"id"`
+	UserID           uint    `json:"userId"`
+	UserType         string  `json:"userType"`
+	AssetID          uint    `json:"assetId"`
+	AssetTicker      string  `json:"assetTicker"`
+	AssetName        string  `json:"assetName"`
+	AssetType        string  `json:"assetType"`
+	Exchange         string  `json:"exchange"`
+	Currency         string  `json:"currency"`
+	Quantity         float64 `json:"quantity"`
+	AvgBuyPrice      float64 `json:"avgBuyPrice"`
+	CurrentPrice     float64 `json:"currentPrice"`
+	MarketValue      float64 `json:"marketValue"`
+	UnrealizedPnL    float64 `json:"unrealizedPnL"`
+	UnrealizedPnLPct float64 `json:"unrealizedPnLPct"`
+	RealizedProfit   float64 `json:"realizedProfit"`
+	IsPublic         bool    `json:"isPublic"`
+	AccountID        uint    `json:"accountId"`
+	CreatedAt        string  `json:"createdAt"`
+}
+
+type portfolioSummaryResponse struct {
+	OwnerID        string            `json:"ownerId"`
+	OwnerType      string            `json:"ownerType"`
+	GeneratedAt    string            `json:"generatedAt"`
+	EstimatedValue float64           `json:"estimatedValue"`
+	UnrealizedPnL  float64           `json:"unrealizedPnL"`
+	RealizedProfit float64           `json:"realizedProfit"`
+	PositionCount  int               `json:"positionCount"`
+	Holdings       []holdingResponse `json:"holdings"`
+}
+
+func holdingToResponse(h service.HoldingWithPnL) holdingResponse {
+	ticker, name, assetType, exchange, currency := "", "", "", "", ""
+	if h.Holding.Asset.ID != 0 {
+		ticker = h.Holding.Asset.Ticker
+		name = h.Holding.Asset.Name
+		assetType = h.Holding.Asset.Type
+		exchange = h.Holding.Asset.Exchange.Acronym
+		currency = h.Holding.Asset.Exchange.Currency
+	}
+	return holdingResponse{
+		ID:               h.Holding.ID,
+		UserID:           h.Holding.UserID,
+		UserType:         h.Holding.UserType,
+		AssetID:          h.Holding.AssetID,
+		AssetTicker:      ticker,
+		AssetName:        name,
+		AssetType:        assetType,
+		Exchange:         exchange,
+		Currency:         currency,
+		Quantity:         h.Holding.Quantity,
+		AvgBuyPrice:      h.Holding.AvgBuyPrice,
+		CurrentPrice:     h.CurrentPrice,
+		MarketValue:      h.MarketValue,
+		UnrealizedPnL:    h.UnrealizedPnL,
+		UnrealizedPnLPct: h.UnrealizedPnLPct,
+		RealizedProfit:   h.Holding.RealizedProfit,
+		IsPublic:         h.Holding.IsPublic,
+		AccountID:        h.Holding.AccountID,
+		CreatedAt:        h.Holding.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func buildPortfolioSummary(userID uint, userType string, holdings []service.HoldingWithPnL) portfolioSummaryResponse {
+	var totalValue, totalPnL, totalRealized float64
+	items := make([]holdingResponse, 0, len(holdings))
+	for _, h := range holdings {
+		totalValue += h.MarketValue
+		totalPnL += h.UnrealizedPnL
+		totalRealized += h.Holding.RealizedProfit
+		items = append(items, holdingToResponse(h))
+	}
+	return portfolioSummaryResponse{
+		OwnerID:        strconv.FormatUint(uint64(userID), 10),
+		OwnerType:      userType,
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		EstimatedValue: round2(totalValue),
+		UnrealizedPnL:  round2(totalPnL),
+		RealizedProfit: round2(totalRealized),
+		PositionCount:  len(items),
+		Holdings:       items,
+	}
+}
+
+func round2(v float64) float64 {
+	return float64(int(v*100+0.5)) / 100
+}

@@ -39,7 +39,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	cronScheduler := service.StartCronJobs(db)
+	// Build shared repos and services before starting cron so they're reusable.
+	marketRepo := repository.NewMarketRepository(db)
+	orderRepo := repository.NewOrderRepository(db)
+	portfolioSvc := service.NewPortfolioService(
+		repository.NewPortfolioRepository(db),
+		repository.NewTaxRepository(db),
+		marketRepo,
+		orderRepo,
+	)
+
+	cronScheduler := service.StartCronJobs(db, portfolioSvc)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -50,14 +60,13 @@ func main() {
 	defer cronScheduler.Stop()
 
 	exchangeH := handler.NewExchangeHandler()
-	marketRepo := repository.NewMarketRepository(db)
 	marketProvider := provider.NewDatabaseMarketProvider(marketRepo)
 	marketSvc := service.NewMarketService(marketProvider)
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
-	orderRepo := repository.NewOrderRepository(db)
 	orderSvc := service.NewOrderService(orderRepo, marketRepo)
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
+	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -99,7 +108,8 @@ func main() {
 	httpMux.Handle("/api/v1/exchanges/", middleware.CORS(http.HandlerFunc(marketH.ExchangeRoutes)))
 	httpMux.Handle("/api/v1/listings", middleware.CORS(http.HandlerFunc(marketH.ListListings)))
 	httpMux.Handle("/api/v1/listings/", middleware.CORS(http.HandlerFunc(marketH.ListingRoutes)))
-	httpMux.Handle("/api/v1/portfolio", middleware.CORS(http.HandlerFunc(marketH.GetPortfolio)))
+	httpMux.Handle("/api/v1/portfolio", middleware.CORS(http.HandlerFunc(portfolioH.PortfolioCollection)))
+	httpMux.Handle("/api/v1/portfolio/", middleware.CORS(http.HandlerFunc(portfolioH.PortfolioRoutes)))
 	httpMux.Handle("/api/v1/orders", middleware.CORS(http.HandlerFunc(orderH.OrdersCollection)))
 	httpMux.Handle("/api/v1/orders/", middleware.CORS(http.HandlerFunc(orderH.OrderRoutes)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
