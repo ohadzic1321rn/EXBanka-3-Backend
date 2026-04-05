@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
@@ -15,12 +16,24 @@ import (
 func StartCronJobs(db *gorm.DB) *cron.Cron {
 	c := cron.New()
 
-	// Refresh listing prices every 15 minutes
+	// Refresh listing prices every 15 minutes.
 	_, err := c.AddFunc("@every 15m", func() {
 		refreshListingPrices(db)
 	})
 	if err != nil {
 		slog.Error("Failed to add price refresh cron job", "error", err)
+	}
+
+	// Order execution engine: attempt to fill active orders every minute.
+	executor := NewOrderExecutor(
+		repository.NewOrderRepository(db),
+		repository.NewMarketRepository(db),
+	)
+	_, err = c.AddFunc("@every 1m", func() {
+		executor.Run()
+	})
+	if err != nil {
+		slog.Error("Failed to add order executor cron job", "error", err)
 	}
 
 	c.Start()
