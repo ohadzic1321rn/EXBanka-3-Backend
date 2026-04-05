@@ -174,6 +174,70 @@ func (s *OrderService) resolveStatus(input CreateOrderInput, totalPrice float64)
 	return "approved", false, nil
 }
 
+// ApproveOrder approves a pending order on behalf of a supervisor.
+// If the order's asset has a past settlement date it is auto-declined instead.
+// For employee orders the agent's usedLimit is incremented on approval since it
+// was withheld while the order was pending.
+func (s *OrderService) ApproveOrder(orderID, supervisorID uint) error {
+	order, err := s.orderRepo.GetOrderByID(orderID)
+	if err != nil {
+		return fmt.Errorf("failed to load order: %w", err)
+	}
+	if order == nil {
+		return fmt.Errorf("order not found")
+	}
+	if order.Status != "pending" {
+		return fmt.Errorf("order is not pending (status: %s)", order.Status)
+	}
+
+	// Auto-decline if the underlying asset's settlement date has passed.
+	expired, err := s.isSettlementExpired(order.AssetID)
+	if err != nil {
+		return fmt.Errorf("failed to check settlement date: %w", err)
+	}
+	if expired {
+		return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
+	}
+
+	// Increment the agent's usedLimit now that the order is officially approved.
+	if order.UserType == "employee" {
+		totalPrice := round2(float64(order.ContractSize) * order.PricePerUnit * float64(order.Quantity))
+		if err := s.orderRepo.IncrementUsedLimit(order.UserID, totalPrice); err != nil {
+			return fmt.Errorf("failed to update actuary used limit: %w", err)
+		}
+	}
+
+	return s.orderRepo.UpdateOrderStatus(orderID, "approved", &supervisorID)
+}
+
+// DeclineOrder declines a pending order on behalf of a supervisor.
+func (s *OrderService) DeclineOrder(orderID, supervisorID uint) error {
+	order, err := s.orderRepo.GetOrderByID(orderID)
+	if err != nil {
+		return fmt.Errorf("failed to load order: %w", err)
+	}
+	if order == nil {
+		return fmt.Errorf("order not found")
+	}
+	if order.Status != "pending" {
+		return fmt.Errorf("order is not pending (status: %s)", order.Status)
+	}
+	return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
+}
+
+// isSettlementExpired returns true when the listing is a futures or options
+// contract whose settlement date has already passed.
+func (s *OrderService) isSettlementExpired(assetID uint) (bool, error) {
+	settlDate, err := s.orderRepo.GetSettlementDate(assetID)
+	if err != nil {
+		return false, err
+	}
+	if settlDate == nil {
+		return false, nil // not a dated instrument
+	}
+	return time.Now().After(*settlDate), nil
+}
+
 // GetOrder returns a single order by ID.
 func (s *OrderService) GetOrder(id uint) (*models.OrderRecord, error) {
 	order, err := s.orderRepo.GetOrderByID(id)

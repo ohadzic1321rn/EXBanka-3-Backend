@@ -138,6 +138,20 @@ func (r *OrderRepository) IncrementUsedLimit(employeeID uint, delta float64) err
 		UpdateColumn("used_limit", gorm.Expr("used_limit + ?", delta)).Error
 }
 
+// GetSettlementDate returns the settlement date for a futures or options listing,
+// or nil if the asset type has no settlement date (stocks, forex).
+func (r *OrderRepository) GetSettlementDate(assetID uint) (*time.Time, error) {
+	var futures models.FuturesContractRecord
+	if err := r.db.Where("listing_id = ?", assetID).First(&futures).Error; err == nil {
+		return &futures.SettlementDate, nil
+	}
+	var option models.OptionRecord
+	if err := r.db.Where("listing_id = ?", assetID).First(&option).Error; err == nil {
+		return &option.SettlementDate, nil
+	}
+	return nil, nil // not a dated instrument
+}
+
 // --- Account helpers (reads from shared DB, account-service tables) ---
 
 // GetAccountBalance returns the raspolozivo_stanje (available balance) and currency_kod for an account.
