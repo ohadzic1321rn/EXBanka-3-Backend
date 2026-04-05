@@ -85,6 +85,12 @@ func (s *TaxService) ListTaxRecords(userID uint, userType, period string) ([]mod
 	return s.taxRepo.ListTaxRecordsForUser(userID, userType, period)
 }
 
+// ListAllTaxRecords returns all tax records for all users (supervisor view), optionally
+// filtered by period.
+func (s *TaxService) ListAllTaxRecords(period string) ([]models.TaxRecord, error) {
+	return s.taxRepo.ListAllTaxRecords(period)
+}
+
 // SumUnpaidTax returns the total unpaid tax for a user in a given period.
 func (s *TaxService) SumUnpaidTax(userID uint, userType, period string) (float64, error) {
 	return s.taxRepo.SumUnpaidTaxForUser(userID, userType, period)

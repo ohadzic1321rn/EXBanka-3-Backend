@@ -41,6 +41,20 @@ func (r *TaxRepository) SumUnpaidTaxForUser(userID uint, userType, period string
 	return total, err
 }
 
+// ListAllTaxRecords returns all tax records, optionally filtered by period.
+// Intended for supervisor use only.
+func (r *TaxRepository) ListAllTaxRecords(period string) ([]models.TaxRecord, error) {
+	q := r.db.Model(&models.TaxRecord{})
+	if period != "" {
+		q = q.Where("period = ?", period)
+	}
+	var records []models.TaxRecord
+	if err := q.Order("period DESC, user_id ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 // TaxableUser identifies a user who has unpaid tax records.
 type TaxableUser struct {
 	UserID   uint

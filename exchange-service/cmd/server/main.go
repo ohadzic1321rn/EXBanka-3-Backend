@@ -70,6 +70,9 @@ func main() {
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 
+	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
+	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)
+
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			middleware.LoggingInterceptor(),
@@ -114,6 +117,7 @@ func main() {
 	httpMux.Handle("/api/v1/portfolio/", middleware.CORS(http.HandlerFunc(portfolioH.PortfolioRoutes)))
 	httpMux.Handle("/api/v1/orders", middleware.CORS(http.HandlerFunc(orderH.OrdersCollection)))
 	httpMux.Handle("/api/v1/orders/", middleware.CORS(http.HandlerFunc(orderH.OrderRoutes)))
+	httpMux.Handle("/api/v1/tax/", middleware.CORS(http.HandlerFunc(taxH.TaxRoutes)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{
