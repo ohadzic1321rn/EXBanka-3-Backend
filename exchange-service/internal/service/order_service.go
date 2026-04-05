@@ -234,24 +234,41 @@ func validateOrderInput(input CreateOrderInput) error {
 //
 // Market: buy fills at ask, sell fills at bid.
 //
-// Limit: use the better of the limit price and the current market price if the
-// condition is already satisfied at placement time, otherwise fall back to
-// limit_value (worst-case committed price used for commission + limit checks).
+// Limit: use current market price if the condition is already satisfied,
+// otherwise fall back to limit_value (worst-case committed price).
 //   - Buy limit:  condition = ask <= limit_value  → fill price = ask
 //   - Sell limit: condition = bid >= limit_value  → fill price = bid
 //
-// Stop / stop-limit: the stop condition is evaluated by the cron executor; store
-// stop_value as the committed reference price for commission + limit checks.
+// Stop: becomes a market order when the stop triggers. If the condition is
+// already met at placement, use current ask/bid; otherwise use stop_value.
+//   - Buy stop:  condition = ask > stop_value  (buy into a rising market)
+//   - Sell stop: condition = bid < stop_value  (sell into a falling market)
+//
+// Stop-limit: stop triggers the order, which then executes as a limit at
+// limit_value. Use limit_value as the committed reference price.
 func orderPricePerUnit(listing *models.MarketListingRecord, input CreateOrderInput) float64 {
 	switch input.OrderType {
 	case "limit":
 		if input.Direction == "buy" && listing.Ask <= *input.LimitValue {
-			return listing.Ask // already satisfiable — get the better price
+			return listing.Ask
 		}
 		if input.Direction == "sell" && listing.Bid >= *input.LimitValue {
-			return listing.Bid // already satisfiable — get the better price
+			return listing.Bid
 		}
-		return *input.LimitValue // conditions not met yet; use committed limit price
+		return *input.LimitValue
+
+	case "stop":
+		if input.Direction == "buy" && listing.Ask > *input.StopValue {
+			return listing.Ask // stop already triggered — market fill
+		}
+		if input.Direction == "sell" && listing.Bid < *input.StopValue {
+			return listing.Bid // stop already triggered — market fill
+		}
+		return *input.StopValue // not yet triggered; use stop as reference
+
+	case "stop_limit":
+		// When the stop triggers the order executes as a limit at limit_value.
+		return *input.LimitValue
 
 	default: // "market"
 		if input.Direction == "buy" {
@@ -262,10 +279,10 @@ func orderPricePerUnit(listing *models.MarketListingRecord, input CreateOrderInp
 }
 
 // calcCommission computes the commission for an order.
-// Market: min(14% * price, $7)
-// Limit/Stop/Stop-Limit: min(24% * price, $12)
+// Market + Stop (stop becomes a market order on trigger): min(14% * price, $7)
+// Limit + Stop-Limit (stop-limit becomes a limit order on trigger): min(24% * price, $12)
 func calcCommission(orderType string, totalPrice float64) float64 {
-	if orderType == "market" {
+	if orderType == "market" || orderType == "stop" {
 		return math.Min(marketCommissionRate*totalPrice, marketCommissionCap)
 	}
 	return math.Min(limitCommissionRate*totalPrice, limitCommissionCap)
