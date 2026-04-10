@@ -16,12 +16,13 @@ const (
 
 // TaxService records capital gains tax for sell transactions.
 type TaxService struct {
-	taxRepo    *repository.TaxRepository
-	marketRepo *repository.MarketRepository
+	taxRepo      *repository.TaxRepository
+	marketRepo   *repository.MarketRepository
+	rateProvider RateProviderInterface
 }
 
-func NewTaxService(taxRepo *repository.TaxRepository, marketRepo *repository.MarketRepository) *TaxService {
-	return &TaxService{taxRepo: taxRepo, marketRepo: marketRepo}
+func NewTaxService(taxRepo *repository.TaxRepository, marketRepo *repository.MarketRepository, rateProvider RateProviderInterface) *TaxService {
+	return &TaxService{taxRepo: taxRepo, marketRepo: marketRepo, rateProvider: rateProvider}
 }
 
 // RecordCapitalGainTax converts the realised profit to RSD and persists a
@@ -101,13 +102,12 @@ func (s *TaxService) SumPaidTaxForYear(userID uint, userType, year string) (floa
 	return s.taxRepo.SumPaidTaxForUserYear(userID, userType, year)
 }
 
-// toRSD converts an amount from the given currency to RSD.
-// Falls back to the original amount when no forex pair is found.
+// toRSD converts an amount from the given currency to RSD using the rate provider.
 func (s *TaxService) toRSD(amount float64, currency string) float64 {
 	if currency == rsdCurrency || currency == "" {
 		return amount
 	}
-	rate, err := s.marketRepo.GetForexRate(currency, rsdCurrency)
+	rate, err := s.rateProvider.GetRate(currency, rsdCurrency)
 	if err != nil || rate == 0 {
 		slog.Warn("tax service: no forex rate found, using 1:1 fallback",
 			"from", currency, "to", rsdCurrency)

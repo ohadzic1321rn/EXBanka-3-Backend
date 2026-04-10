@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	exchangev1 "github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/gen/proto/exchange/v1"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
@@ -39,11 +40,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Shared rate provider: same static rates used by the exchange rates page, with caching.
+	staticRates := provider.NewStaticRateProvider()
+	rateProvider := provider.NewCachedProvider(staticRates, staticRates, 24*time.Hour)
+
 	// Build shared repos and services before starting cron so they're reusable.
 	marketRepo := repository.NewMarketRepository(db)
 	orderRepo := repository.NewOrderRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
-	taxSvc := service.NewTaxService(taxRepo, marketRepo)
+	taxSvc := service.NewTaxService(taxRepo, marketRepo, rateProvider)
 	portfolioSvc := service.NewPortfolioService(
 		repository.NewPortfolioRepository(db),
 		taxSvc,
@@ -51,7 +56,7 @@ func main() {
 		orderRepo,
 	)
 
-	cronScheduler := service.StartCronJobs(db, portfolioSvc)
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -66,7 +71,7 @@ func main() {
 	marketSvc := service.NewMarketService(marketProvider)
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
-	orderSvc := service.NewOrderService(orderRepo, marketRepo)
+	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,48 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
 )
+
+const bsRiskFreeRate = 0.05 // 5% annual risk-free rate used in Black-Scholes
+
+// blackScholesTheta computes the daily theta (time decay) for an option using Black-Scholes.
+// Returns the change in option value per day (always negative for long positions).
+// Returns 0 if the option has already expired or inputs are invalid.
+func blackScholesTheta(stockPrice, strikePrice, impliedVolatility float64, settlementDate time.Time, optionType string) float64 {
+	T := time.Until(settlementDate).Hours() / (365.0 * 24.0) // time to expiry in years
+	if T <= 0 || stockPrice <= 0 || strikePrice <= 0 || impliedVolatility <= 0 {
+		return 0
+	}
+
+	S := stockPrice
+	K := strikePrice
+	sigma := impliedVolatility
+	r := bsRiskFreeRate
+	sqrtT := math.Sqrt(T)
+
+	d1 := (math.Log(S/K) + (r+sigma*sigma/2)*T) / (sigma * sqrtT)
+	d2 := d1 - sigma*sqrtT
+
+	// Standard normal PDF at d1
+	nPrimeD1 := math.Exp(-d1*d1/2) / math.Sqrt(2*math.Pi)
+
+	firstTerm := -(S * sigma * nPrimeD1) / (2 * sqrtT)
+
+	var annualTheta float64
+	if optionType == "call" {
+		annualTheta = firstTerm - r*K*math.Exp(-r*T)*normalCDF(d2)
+	} else { // put
+		annualTheta = firstTerm + r*K*math.Exp(-r*T)*normalCDF(-d2)
+	}
+
+	// Convert to daily theta and round to 4 decimal places
+	daily := annualTheta / 365.0
+	return math.Round(daily*10000) / 10000
+}
+
+// normalCDF is the standard normal cumulative distribution function.
+func normalCDF(x float64) float64 {
+	return 0.5 * math.Erfc(-x/math.Sqrt2)
+}
 
 type MarketHTTPHandler struct {
 	cfg  *config.Config
@@ -182,6 +225,7 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 		}
 		optionItems := make([]map[string]interface{}, 0, len(options))
 		for _, opt := range options {
+			theta := blackScholesTheta(record.Price, opt.StrikePrice, opt.ImpliedVolatility, opt.SettlementDate, opt.OptionType)
 			optionItems = append(optionItems, map[string]interface{}{
 				"ticker":            opt.Listing.Ticker,
 				"name":              opt.Listing.Name,
@@ -194,6 +238,7 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 				"impliedVolatility": opt.ImpliedVolatility,
 				"openInterest":      opt.OpenInterest,
 				"settlementDate":    opt.SettlementDate.Format("2006-01-02"),
+				"theta":             theta,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{

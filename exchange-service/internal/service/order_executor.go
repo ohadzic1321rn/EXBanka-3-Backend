@@ -14,13 +14,14 @@ const afterHoursDelay = 30 * time.Minute
 
 // OrderExecutor fills active orders on each cron tick.
 type OrderExecutor struct {
-	orderRepo     *repository.OrderRepository
-	marketRepo    *repository.MarketRepository
-	portfolioSvc  *PortfolioService
+	orderRepo    *repository.OrderRepository
+	marketRepo   *repository.MarketRepository
+	portfolioSvc *PortfolioService
+	rateProvider RateProviderInterface
 }
 
-func NewOrderExecutor(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository, portfolioSvc *PortfolioService) *OrderExecutor {
-	return &OrderExecutor{orderRepo: orderRepo, marketRepo: marketRepo, portfolioSvc: portfolioSvc}
+func NewOrderExecutor(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository, portfolioSvc *PortfolioService, rateProvider RateProviderInterface) *OrderExecutor {
+	return &OrderExecutor{orderRepo: orderRepo, marketRepo: marketRepo, portfolioSvc: portfolioSvc, rateProvider: rateProvider}
 }
 
 // Run processes all approved, not-done orders and partially or fully fills them
@@ -78,11 +79,64 @@ func (e *OrderExecutor) Run() {
 			// Non-fatal: order fill is committed; portfolio can be reconciled later.
 		}
 
-		// Credit account for sell fills.
+		// Credit account for sell fills, converting to account currency if needed.
+		// Commission is deducted from the proceeds and credited to the bank account.
 		if order.Direction == "sell" {
 			fillAmount := round2(float64(fillQty) * float64(order.ContractSize) * price)
-			if err := e.orderRepo.CreditAccount(order.AccountID, fillAmount); err != nil {
+			assetCurrency := order.Asset.Exchange.Currency
+
+			// Proportional commission for this partial fill (in asset trading currency).
+			fillCommission := round2(order.Commission * float64(fillQty) / float64(order.Quantity))
+
+			// Credit bank account with the commission in the asset's trading currency.
+			if fillCommission > 0 {
+				bankAccountID, err := e.orderRepo.GetBankAccountByCurrency(assetCurrency)
+				if err != nil {
+					slog.Error("order executor: failed to find bank account for sell commission", "orderID", order.ID, "currency", assetCurrency, "error", err)
+				} else if bankAccountID > 0 {
+					if err := e.orderRepo.CreditAccount(bankAccountID, fillCommission); err != nil {
+						slog.Error("order executor: failed to credit bank sell commission", "orderID", order.ID, "currency", assetCurrency, "amount", fillCommission, "error", err)
+					}
+				} else {
+					slog.Warn("order executor: no bank account found for currency, sell commission not credited", "orderID", order.ID, "currency", assetCurrency)
+				}
+			}
+
+			// Net proceeds after commission, converted to account currency if needed.
+			netAmount := round2(fillAmount - fillCommission)
+			_, accountCurrency, err := e.orderRepo.GetAccountBalance(order.AccountID)
+			if err != nil {
+				slog.Error("order executor: failed to get account currency on sell", "orderID", order.ID, "error", err)
+			} else if assetCurrency != accountCurrency {
+				rate, err := e.rateProvider.GetRate(assetCurrency, accountCurrency)
+				if err != nil || rate == 0 {
+					slog.Error("order executor: no forex rate for sell proceeds", "orderID", order.ID, "from", assetCurrency, "to", accountCurrency)
+				} else {
+					netAmount = round2(netAmount * rate)
+				}
+			}
+			if err := e.orderRepo.CreditAccount(order.AccountID, netAmount); err != nil {
 				slog.Error("order executor: failed to credit account on sell", "orderID", order.ID, "error", err)
+			}
+		}
+
+		// Credit the bank's account with the proportional commission for buy fills.
+		// Commission was already deducted from the client's account at order creation.
+		// The commission is in the asset's trading currency (exchange currency), not the user's account currency.
+		if order.Direction == "buy" && order.Commission > 0 {
+			fillCommission := round2(order.Commission * float64(fillQty) / float64(order.Quantity))
+			if fillCommission > 0 {
+				currencyKod := order.Asset.Exchange.Currency
+				bankAccountID, err := e.orderRepo.GetBankAccountByCurrency(currencyKod)
+				if err != nil {
+					slog.Error("order executor: failed to find bank account for commission", "orderID", order.ID, "currency", currencyKod, "error", err)
+				} else if bankAccountID > 0 {
+					if err := e.orderRepo.CreditAccount(bankAccountID, fillCommission); err != nil {
+						slog.Error("order executor: failed to credit bank commission", "orderID", order.ID, "currency", currencyKod, "amount", fillCommission, "error", err)
+					}
+				} else {
+					slog.Warn("order executor: no bank account found for currency, commission not credited", "orderID", order.ID, "currency", currencyKod)
+				}
 			}
 		}
 
@@ -122,8 +176,10 @@ func conditionsMet(order *models.OrderRecord, listing *models.MarketListingRecor
 		return listing.Bid < *order.StopValue
 	case "stop_limit":
 		// Stop triggers activation; limit guards the fill price.
+		// Buy:  Ask reaches or exceeds stop value, AND Ask is still within limit.
+		// Sell: Bid falls below stop value, AND Bid is still within limit.
 		if order.Direction == "buy" {
-			return listing.Ask > *order.StopValue && listing.Ask <= *order.LimitValue
+			return listing.Ask >= *order.StopValue && listing.Ask <= *order.LimitValue
 		}
 		return listing.Bid < *order.StopValue && listing.Bid >= *order.LimitValue
 	}

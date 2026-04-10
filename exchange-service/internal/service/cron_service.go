@@ -14,7 +14,7 @@ import (
 
 // StartCronJobs sets up and starts the cron scheduler for the exchange service.
 // portfolioSvc is created in main and shared with the portfolio HTTP handler.
-func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService) *cron.Cron {
+func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider RateProviderInterface) *cron.Cron {
 	c := cron.New()
 
 	// Refresh listing prices every 15 minutes.
@@ -28,7 +28,7 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService) *cron.Cron {
 	// Order execution engine: attempt to fill active orders every minute.
 	orderRepo := repository.NewOrderRepository(db)
 	marketRepo := repository.NewMarketRepository(db)
-	executor := NewOrderExecutor(orderRepo, marketRepo, portfolioSvc)
+	executor := NewOrderExecutor(orderRepo, marketRepo, portfolioSvc, rateProvider)
 	_, err = c.AddFunc("@every 1m", func() {
 		executor.Run()
 	})
@@ -38,7 +38,7 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService) *cron.Cron {
 
 	// Monthly tax collection: runs at 02:00 on the 1st of each month.
 	taxRepo := repository.NewTaxRepository(db)
-	taxSvc := NewTaxService(taxRepo, marketRepo)
+	taxSvc := NewTaxService(taxRepo, marketRepo, rateProvider)
 	taxCollector := NewTaxCollector(taxSvc, orderRepo, taxRepo)
 	_, err = c.AddFunc("0 2 1 * *", func() {
 		period := PreviousMonthPeriod()

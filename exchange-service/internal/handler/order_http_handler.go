@@ -95,11 +95,26 @@ func (h *OrderHTTPHandler) createOrder(w http.ResponseWriter, r *http.Request) {
 
 	userID, userType := callerIdentity(claims)
 
+	// Auto-detect order type from provided values when the client sends "market".
+	// Both values → stop_limit; limit only → limit; stop only → stop.
+	orderType := body.OrderType
+	if orderType == "market" {
+		hasLimit := body.LimitValue != nil && *body.LimitValue > 0
+		hasStop := body.StopValue != nil && *body.StopValue > 0
+		if hasLimit && hasStop {
+			orderType = "stop_limit"
+		} else if hasLimit {
+			orderType = "limit"
+		} else if hasStop {
+			orderType = "stop"
+		}
+	}
+
 	input := service.CreateOrderInput{
 		UserID:       userID,
 		UserType:     userType,
 		AssetTicker:  body.AssetTicker,
-		OrderType:    body.OrderType,
+		OrderType:    orderType,
 		Direction:    body.Direction,
 		Quantity:     body.Quantity,
 		ContractSize: body.ContractSize,

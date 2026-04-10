@@ -21,14 +21,16 @@ const (
 
 // OrderService handles order creation, approval, and cancellation.
 type OrderService struct {
-	orderRepo  *repository.OrderRepository
-	marketRepo *repository.MarketRepository
+	orderRepo    *repository.OrderRepository
+	marketRepo   *repository.MarketRepository
+	rateProvider RateProviderInterface
 }
 
-func NewOrderService(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository) *OrderService {
+func NewOrderService(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository, rateProvider RateProviderInterface) *OrderService {
 	return &OrderService{
-		orderRepo:  orderRepo,
-		marketRepo: marketRepo,
+		orderRepo:    orderRepo,
+		marketRepo:   marketRepo,
+		rateProvider: rateProvider,
 	}
 }
 
@@ -85,33 +87,53 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*CreateOrderResult, 
 	// Commission depends on order type.
 	commission := calcCommission(input.OrderType, totalPrice)
 
+	// For buy orders, resolve the exchange rate between the asset's trading currency and
+	// the account's currency. The rate is stored on the order so refunds use the same rate.
+	// Sell orders don't debit at creation time — proceeds are converted at fill time.
+	currencyRate := 1.0
+	if input.Direction == "buy" {
+		assetCurrency := listing.Exchange.Currency
+		_, accountCurrency, err := s.orderRepo.GetAccountBalance(input.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read account currency: %w", err)
+		}
+		if assetCurrency != accountCurrency {
+			rate, err := s.rateProvider.GetRate(assetCurrency, accountCurrency)
+			if err != nil || rate == 0 {
+				return nil, fmt.Errorf("no exchange rate available for %s/%s", assetCurrency, accountCurrency)
+			}
+			currencyRate = rate
+		}
+	}
+
 	// Margin orders: verify the account has enough available balance to cover
-	// the Initial Margin Cost before accepting the order.
-	// MaintenanceMargin = contractSize * pricePerUnit * 10%
-	// InitialMarginCost = MaintenanceMargin * 1.1
+	// the Initial Margin Cost (MaintenanceMargin × 1.1) before accepting the order.
 	if input.IsMargin {
-		if err := s.validateMargin(input.AccountID, contractSize, pricePerUnit); err != nil {
+		if err := s.validateMargin(input.AccountID, listing, input.Quantity, contractSize, pricePerUnit, currencyRate); err != nil {
 			return nil, err
 		}
 	}
 
+	// Convert totalPrice to RSD for agent limit checks (limits are always in RSD).
+	totalPriceRSD := s.toRSD(totalPrice, listing.Exchange.Currency)
+
 	// Determine initial order status.
-	status, needsApproval, err := s.resolveStatus(input, totalPrice)
+	status, needsApproval, err := s.resolveStatus(input, totalPriceRSD)
 	if err != nil {
 		return nil, err
 	}
 
-	// For agent orders that don't need approval, increment their usedLimit.
+	// For agent orders that don't need approval, increment their usedLimit in RSD.
 	if input.UserType == "employee" && !needsApproval {
-		if err := s.orderRepo.IncrementUsedLimit(input.UserID, totalPrice); err != nil {
+		if err := s.orderRepo.IncrementUsedLimit(input.UserID, totalPriceRSD); err != nil {
 			return nil, fmt.Errorf("failed to update actuary used limit: %w", err)
 		}
 	}
 
-	// For buy orders, debit the full order value + commission from the account upfront.
-	// On cancel, RefundToAccount returns the unfilled portion (without commission).
+	// For buy orders, debit the full order value + commission from the account upfront,
+	// converted to the account's currency if it differs from the asset's currency.
 	if input.Direction == "buy" {
-		totalDebit := round2(totalPrice + commission)
+		totalDebit := round2((totalPrice + commission) * currencyRate)
 		if err := s.orderRepo.DebitAccount(input.AccountID, totalDebit); err != nil {
 			return nil, fmt.Errorf("insufficient funds: %w", err)
 		}
@@ -135,6 +157,7 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*CreateOrderResult, 
 		IsDone:            false,
 		RemainingPortions: input.Quantity,
 		Commission:        commission,
+		CurrencyRate:      currencyRate,
 		AfterHours:        input.AfterHours,
 		AccountID:         input.AccountID,
 		LastModification:  now,
@@ -175,9 +198,14 @@ func (s *OrderService) resolveStatus(input CreateOrderInput, totalPrice float64)
 		return "approved", false, nil
 	}
 
-	// Agent: check if approval required.
+	// Agent: daily limit already exhausted — hard block, no new orders allowed.
+	if profile.UsedLimit >= *profile.Limit {
+		return "", false, fmt.Errorf("daily trading limit exhausted (used: %.2f RSD, limit: %.2f RSD)", profile.UsedLimit, *profile.Limit)
+	}
+
+	// Agent: order would exceed remaining limit, or agent always requires approval.
 	remaining := *profile.Limit - profile.UsedLimit
-	if profile.NeedApproval || profile.UsedLimit >= *profile.Limit || totalPrice > remaining {
+	if profile.NeedApproval || totalPrice > remaining {
 		return "pending", true, nil
 	}
 
@@ -209,10 +237,11 @@ func (s *OrderService) ApproveOrder(orderID, supervisorID uint) error {
 		return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
 	}
 
-	// Increment the agent's usedLimit now that the order is officially approved.
+	// Increment the agent's usedLimit in RSD now that the order is officially approved.
 	if order.UserType == "employee" {
 		totalPrice := round2(float64(order.ContractSize) * order.PricePerUnit * float64(order.Quantity))
-		if err := s.orderRepo.IncrementUsedLimit(order.UserID, totalPrice); err != nil {
+		totalPriceRSD := s.toRSD(totalPrice, order.Asset.Exchange.Currency)
+		if err := s.orderRepo.IncrementUsedLimit(order.UserID, totalPriceRSD); err != nil {
 			return fmt.Errorf("failed to update actuary used limit: %w", err)
 		}
 	}
@@ -234,10 +263,10 @@ func (s *OrderService) DeclineOrder(orderID, supervisorID uint) error {
 		return fmt.Errorf("order is not pending (status: %s)", order.Status)
 	}
 
-	// Refund the full debit that was taken on creation.
+	// Refund the full debit that was taken on creation, converting back to account currency.
 	if order.Direction == "buy" {
 		totalPrice := round2(float64(order.Quantity) * float64(order.ContractSize) * order.PricePerUnit)
-		refund := round2(totalPrice + order.Commission)
+		refund := round2((totalPrice + order.Commission) * order.CurrencyRate)
 		if err := s.orderRepo.RefundToAccount(order.AccountID, refund); err != nil {
 			return fmt.Errorf("failed to refund account on decline: %w", err)
 		}
@@ -268,7 +297,7 @@ func (s *OrderService) CancelOrder(orderID, requesterID uint, newRemaining int64
 	}
 
 	cancelledQty := order.RemainingPortions - newRemaining
-	refundAmount := round2(float64(cancelledQty) * float64(order.ContractSize) * order.PricePerUnit)
+	refundAmount := round2(float64(cancelledQty) * float64(order.ContractSize) * order.PricePerUnit * order.CurrencyRate)
 
 	if newRemaining == 0 {
 		// Full cancel.
@@ -427,17 +456,57 @@ func orderPricePerUnit(listing *models.MarketListingRecord, input CreateOrderInp
 //
 //	MaintenanceMargin = contractSize * pricePerUnit * 10%
 //	InitialMarginCost = MaintenanceMargin * 1.1
-func (s *OrderService) validateMargin(accountID uint, contractSize int64, pricePerUnit float64) error {
+// validateMargin checks that the account's available balance covers the Initial Margin Cost.
+// Margin rates per asset type:
+//   stock:   50% of total position value  (quantity × contractSize × price × 50%)
+//   option:  100 shares/contract × 50% × underlying stock price  (quantity × contractSize × 100 × stockPrice × 50%)
+//   forex / futures: 10% of nominal value (quantity × contractSize × price × 10%)
+// InitialMarginCost = MaintenanceMargin × 1.1
+func (s *OrderService) validateMargin(accountID uint, listing *models.MarketListingRecord, quantity, contractSize int64, pricePerUnit, currencyRate float64) error {
 	balance, _, err := s.orderRepo.GetAccountBalance(accountID)
 	if err != nil {
 		return fmt.Errorf("failed to read account balance: %w", err)
 	}
-	maintenanceMargin := float64(contractSize) * pricePerUnit * 0.10
-	imc := maintenanceMargin * 1.1
+
+	qty := float64(quantity) * float64(contractSize)
+	var maintenanceMargin float64
+
+	switch listing.Type {
+	case "stock":
+		maintenanceMargin = qty * pricePerUnit * 0.50
+	case "option":
+		opt, err := s.marketRepo.GetOptionByListingID(listing.ID)
+		if err != nil || opt == nil {
+			return fmt.Errorf("option contract data not found for margin calculation")
+		}
+		underlying, err := s.marketRepo.GetListingRecordByID(opt.StockListingID)
+		if err != nil || underlying == nil {
+			return fmt.Errorf("underlying stock not found for option margin calculation")
+		}
+		// Each option contract covers 100 shares; margin = 50% of underlying position value.
+		maintenanceMargin = qty * 100 * underlying.Price * 0.50
+	default: // forex, futures
+		maintenanceMargin = qty * pricePerUnit * 0.10
+	}
+
+	imc := round2(maintenanceMargin * 1.1 * currencyRate)
 	if balance < imc {
 		return fmt.Errorf("insufficient balance for margin order: need %.2f, have %.2f", imc, balance)
 	}
 	return nil
+}
+
+// toRSD converts an amount from the given currency to RSD using the rate provider.
+// Returns the original amount unchanged if already RSD or no rate is found.
+func (s *OrderService) toRSD(amount float64, currency string) float64 {
+	if currency == "RSD" || currency == "" {
+		return amount
+	}
+	rate, err := s.rateProvider.GetRate(currency, "RSD")
+	if err != nil || rate == 0 {
+		return amount
+	}
+	return round2(amount * rate)
 }
 
 // calcCommission computes the commission for an order.

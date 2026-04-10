@@ -272,6 +272,20 @@ func (r *OrderRepository) GetStateTreasuryAccountID() (uint, error) {
 	return id, err
 }
 
+// GetBankAccountByCurrency returns the ID of EXBanka's (non-state firm) account for the given currency.
+// Returns 0 if no such account is found.
+func (r *OrderRepository) GetBankAccountByCurrency(currencyKod string) (uint, error) {
+	var id uint
+	err := r.db.Table("accounts").
+		Select("accounts.id").
+		Joins("JOIN currencies ON currencies.id = accounts.currency_id").
+		Joins("JOIN firmas ON firmas.id = accounts.firma_id").
+		Where("currencies.kod = ? AND firmas.is_state = false AND accounts.status = 'aktivan'", currencyKod).
+		Limit(1).
+		Scan(&id).Error
+	return id, err
+}
+
 // GetAccountBalance returns the raspolozivo_stanje (available balance) and currency_kod for an account.
 func (r *OrderRepository) GetAccountBalance(accountID uint) (balance float64, currencyKod string, err error) {
 	row := r.db.Table("accounts").

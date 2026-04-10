@@ -190,6 +190,7 @@ type OrderRecord struct {
 	IsDone            bool                     `gorm:"column:is_done;not null;default:false"`
 	RemainingPortions int64                    `gorm:"column:remaining_portions;not null"`
 	Commission        float64                  `gorm:"column:commission;not null;default:0"`
+	CurrencyRate      float64                  `gorm:"column:currency_rate;not null;default:1"` // rate from asset currency to account currency at order creation
 	AfterHours        bool                     `gorm:"column:after_hours;not null;default:false"`
 	AccountID         uint                     `gorm:"column:account_id;not null"`
 	LastModification  time.Time                `gorm:"column:last_modification;not null"`
