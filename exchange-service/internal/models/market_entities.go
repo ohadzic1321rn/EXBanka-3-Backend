@@ -173,7 +173,7 @@ func (OptionRecord) TableName() string { return "options" }
 type OrderRecord struct {
 	ID                uint                     `gorm:"primaryKey"`
 	UserID            uint                     `gorm:"column:user_id;not null;index"`
-	UserType          string                   `gorm:"column:user_type;not null"` // "client" or "employee"
+	UserType          string                   `gorm:"column:user_type;not null"` // "client" or "bank" (all employees act on behalf of the bank)
 	AssetID           uint                     `gorm:"column:asset_id;not null;index"`
 	Asset             MarketListingRecord      `gorm:"foreignKey:AssetID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 	OrderType         string                   `gorm:"column:order_type;not null"` // market, limit, stop, stop_limit
@@ -187,6 +187,7 @@ type OrderRecord struct {
 	IsMargin          bool                     `gorm:"column:is_margin;not null;default:false"`
 	Status            string                   `gorm:"not null;default:'pending'"` // pending, approved, declined, done
 	ApprovedBy        *uint                    `gorm:"column:approved_by"`
+	PlacedBy          *uint                    `gorm:"column:placed_by"` // employee who placed the order on the bank's behalf (nil for client orders)
 	IsDone            bool                     `gorm:"column:is_done;not null;default:false"`
 	RemainingPortions int64                    `gorm:"column:remaining_portions;not null"`
 	Commission        float64                  `gorm:"column:commission;not null;default:0"`
@@ -216,7 +217,7 @@ func (OrderTransactionRecord) TableName() string { return "order_transactions" }
 type PortfolioHoldingRecord struct {
 	ID             uint                `gorm:"primaryKey"`
 	UserID         uint                `gorm:"column:user_id;not null;index:idx_portfolio_user_asset"`
-	UserType       string              `gorm:"column:user_type;not null"` // "client" or "employee"
+	UserType       string              `gorm:"column:user_type;not null"` // "client" or "bank" (all employees share the bank-owned portfolio)
 	AssetID        uint                `gorm:"column:asset_id;not null;index:idx_portfolio_user_asset"`
 	Asset          MarketListingRecord `gorm:"foreignKey:AssetID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 	Quantity       float64             `gorm:"not null;default:0"`

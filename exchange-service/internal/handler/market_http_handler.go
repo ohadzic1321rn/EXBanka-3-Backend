@@ -128,17 +128,6 @@ func (h *MarketHTTPHandler) ListListings(w http.ResponseWriter, r *http.Request)
 		listings = filtered
 	}
 
-	// For clients, restrict to stocks and futures only
-	if claims.TokenSource == "client" {
-		filtered := make([]models.Listing, 0, len(listings))
-		for _, l := range listings {
-			if l.Type == models.ListingTypeStock || l.Type == models.ListingTypeFutures {
-				filtered = append(filtered, l)
-			}
-		}
-		listings = filtered
-	}
-
 	items := make([]listingResponse, 0, len(listings))
 	for _, listing := range listings {
 		items = append(items, listingToResponse(listing))
@@ -171,11 +160,25 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	parts := strings.Split(path, "/")
-	ticker := parts[0]
+	// Tickers may contain slashes (e.g. forex pair "EUR/USD"), so detect a
+	// known suffix at the end of the path rather than assuming the ticker is
+	// the first segment.
+	ticker := path
+	suffix := ""
+	if idx := strings.LastIndex(path, "/"); idx != -1 {
+		last := path[idx+1:]
+		if last == "history" || last == "options" {
+			ticker = path[:idx]
+			suffix = last
+		}
+	}
+	if ticker == "" {
+		http.NotFound(w, r)
+		return
+	}
 
-	switch {
-	case len(parts) == 1:
+	switch suffix {
+	case "":
 		record, err := h.repo.GetListingRecordByTicker(strings.ToUpper(ticker))
 		if err != nil || record == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "listing not found"})
@@ -211,7 +214,7 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 			}
 		}
 		writeJSON(w, http.StatusOK, detail)
-	case len(parts) == 2 && parts[1] == "options":
+	case "options":
 		// Get options chain for a stock
 		record, err := h.repo.GetListingRecordByTicker(strings.ToUpper(ticker))
 		if err != nil || record == nil || record.Type != "stock" {
@@ -247,7 +250,7 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 			"options":    optionItems,
 			"count":      len(optionItems),
 		})
-	case len(parts) == 2 && parts[1] == "history":
+	case "history":
 		history, err := h.svc.GetListingHistory(ticker)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": err.Error()})

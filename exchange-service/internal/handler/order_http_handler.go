@@ -113,6 +113,7 @@ func (h *OrderHTTPHandler) createOrder(w http.ResponseWriter, r *http.Request) {
 	input := service.CreateOrderInput{
 		UserID:       userID,
 		UserType:     userType,
+		ActorID:      claims.EmployeeID,
 		AssetTicker:  body.AssetTicker,
 		OrderType:    orderType,
 		Direction:    body.Direction,
@@ -316,11 +317,18 @@ func (h *OrderHTTPHandler) listTransactions(w http.ResponseWriter, r *http.Reque
 
 // --- helpers ---
 
+// All employees act on behalf of the bank: orders, holdings, and taxes
+// collapse onto a single shared bank identity rather than per-employee.
+const (
+	bankUserID   uint   = 0
+	bankUserType string = "bank"
+)
+
 func callerIdentity(claims *util.Claims) (userID uint, userType string) {
 	if claims.TokenSource == "client" {
 		return claims.ClientID, "client"
 	}
-	return claims.EmployeeID, "employee"
+	return bankUserID, bankUserType
 }
 
 func isSupervisor(claims *util.Claims) bool {

@@ -37,7 +37,11 @@ func NewOrderService(orderRepo *repository.OrderRepository, marketRepo *reposito
 // CreateOrderInput holds all fields required to place an order.
 type CreateOrderInput struct {
 	UserID       uint
-	UserType     string   // "client" or "employee"
+	UserType     string // "client" or "bank"
+	// ActorID is the employee placing the order on behalf of the bank.
+	// Used for per-agent daily-limit tracking and approval flow.
+	// Zero for client orders.
+	ActorID      uint
 	AssetTicker  string
 	OrderType    string   // "market", "limit", "stop", "stop_limit"
 	Direction    string   // "buy" or "sell"
@@ -124,8 +128,8 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*CreateOrderResult, 
 	}
 
 	// For agent orders that don't need approval, increment their usedLimit in RSD.
-	if input.UserType == "employee" && !needsApproval {
-		if err := s.orderRepo.IncrementUsedLimit(input.UserID, totalPriceRSD); err != nil {
+	if input.UserType == "bank" && !needsApproval {
+		if err := s.orderRepo.IncrementUsedLimit(input.ActorID, totalPriceRSD); err != nil {
 			return nil, fmt.Errorf("failed to update actuary used limit: %w", err)
 		}
 	}
@@ -140,9 +144,14 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*CreateOrderResult, 
 	}
 
 	now := time.Now().UTC()
+	var placedBy *uint
+	if input.UserType == "bank" && input.ActorID != 0 {
+		placedBy = &input.ActorID
+	}
 	order := &models.OrderRecord{
 		UserID:            input.UserID,
 		UserType:          input.UserType,
+		PlacedBy:          placedBy,
 		AssetID:           listing.ID,
 		OrderType:         input.OrderType,
 		Direction:         input.Direction,
@@ -182,8 +191,8 @@ func (s *OrderService) resolveStatus(input CreateOrderInput, totalPrice float64)
 		return "approved", false, nil
 	}
 
-	// Employee orders: check actuary profile.
-	profile, err := s.orderRepo.GetActuaryProfile(input.UserID)
+	// Bank orders: check the placing agent's actuary profile.
+	profile, err := s.orderRepo.GetActuaryProfile(input.ActorID)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to read actuary profile: %w", err)
 	}
@@ -203,9 +212,15 @@ func (s *OrderService) resolveStatus(input CreateOrderInput, totalPrice float64)
 		return "", false, fmt.Errorf("daily trading limit exhausted (used: %.2f RSD, limit: %.2f RSD)", profile.UsedLimit, *profile.Limit)
 	}
 
-	// Agent: order would exceed remaining limit, or agent always requires approval.
+	// Agent: order would exceed remaining daily limit — reject outright. The
+	// agent can resubmit a smaller order; no supervisor approval is requested.
 	remaining := *profile.Limit - profile.UsedLimit
-	if profile.NeedApproval || totalPrice > remaining {
+	if totalPrice > remaining {
+		return "", false, fmt.Errorf("order exceeds remaining daily limit (cost: %.2f RSD, remaining: %.2f RSD)", totalPrice, remaining)
+	}
+
+	// Agent flagged as always-needs-approval still routes to supervisor.
+	if profile.NeedApproval {
 		return "pending", true, nil
 	}
 
@@ -237,11 +252,11 @@ func (s *OrderService) ApproveOrder(orderID, supervisorID uint) error {
 		return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
 	}
 
-	// Increment the agent's usedLimit in RSD now that the order is officially approved.
-	if order.UserType == "employee" {
+	// Increment the placing agent's usedLimit in RSD now that the order is officially approved.
+	if order.UserType == "bank" && order.PlacedBy != nil {
 		totalPrice := round2(float64(order.ContractSize) * order.PricePerUnit * float64(order.Quantity))
 		totalPriceRSD := s.toRSD(totalPrice, order.Asset.Exchange.Currency)
-		if err := s.orderRepo.IncrementUsedLimit(order.UserID, totalPriceRSD); err != nil {
+		if err := s.orderRepo.IncrementUsedLimit(*order.PlacedBy, totalPriceRSD); err != nil {
 			return fmt.Errorf("failed to update actuary used limit: %w", err)
 		}
 	}
@@ -362,11 +377,11 @@ func (s *OrderService) ListTransactionsForOrder(orderID uint) ([]models.OrderTra
 // --- Helpers ---
 
 func validateOrderInput(input CreateOrderInput) error {
-	if input.UserID == 0 {
-		return fmt.Errorf("user ID is required")
+	if input.UserType != "client" && input.UserType != "bank" {
+		return fmt.Errorf("user type must be 'client' or 'bank'")
 	}
-	if input.UserType != "client" && input.UserType != "employee" {
-		return fmt.Errorf("user type must be 'client' or 'employee'")
+	if input.UserType == "client" && input.UserID == 0 {
+		return fmt.Errorf("user ID is required")
 	}
 	if input.AssetTicker == "" {
 		return fmt.Errorf("asset ticker is required")
