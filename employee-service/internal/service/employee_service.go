@@ -143,7 +143,9 @@ func (s *EmployeeService) CreateEmployee(input CreateEmployeeInput) (*models.Emp
 		return nil, err
 	}
 
-	_ = s.notifSvc.SendActivationEmail(emp.Email, emp.Ime+" "+emp.Prezime, tokenStr)
+	if s.notifSvc != nil {
+		_ = s.notifSvc.SendActivationEmail(emp.Email, emp.Ime+" "+emp.Prezime, tokenStr)
+	}
 	return emp, nil
 }
 

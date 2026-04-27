@@ -133,11 +133,13 @@ func (h *PaymentHandler) CreatePayment(ctx context.Context, req *paymentv1.Creat
 		input.RecipientID = &id
 	}
 	// Get client email from JWT claims for verification email
-	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
-		var client models.Client
-		if err := h.db.First(&client, claims.ClientID).Error; err == nil {
-			input.ClientEmail = client.Email
-			input.ClientName = client.Ime + " " + client.Prezime
+	if h.db != nil {
+		if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
+			var client models.Client
+			if err := h.db.First(&client, claims.ClientID).Error; err == nil {
+				input.ClientEmail = client.Email
+				input.ClientName = client.Ime + " " + client.Prezime
+			}
 		}
 	}
 

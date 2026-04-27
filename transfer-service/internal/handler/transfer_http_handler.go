@@ -90,8 +90,10 @@ func (h *TransferHTTPHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, "sender and receiver account IDs are required")
 		return
 	}
-	if ok := h.ensureAccountsOwnedByClient(w, claims.ClientID, input.RacunPosiljaocaID, input.RacunPrimaocaID); !ok {
-		return
+	if claims != nil {
+		if ok := h.ensureAccountsOwnedByClient(w, claims.ClientID, input.RacunPosiljaocaID, input.RacunPrimaocaID); !ok {
+			return
+		}
 	}
 
 	transfer, err := h.svc.CreateAndSettleTransfer(input)
@@ -126,8 +128,10 @@ func (h *TransferHTTPHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, "sender and receiver account IDs are required")
 		return
 	}
-	if ok := h.ensureAccountsOwnedByClient(w, claims.ClientID, input.RacunPosiljaocaID, input.RacunPrimaocaID); !ok {
-		return
+	if claims != nil {
+		if ok := h.ensureAccountsOwnedByClient(w, claims.ClientID, input.RacunPosiljaocaID, input.RacunPrimaocaID); !ok {
+			return
+		}
 	}
 
 	preview, err := h.svc.PreviewTransfer(input)
@@ -203,14 +207,16 @@ func (h *TransferHTTPHandler) ListByAccount(w http.ResponseWriter, r *http.Reque
 		writeAuthError(w, http.StatusBadRequest, "invalid account id")
 		return
 	}
-	owned, err := h.accountOwnedByClient(accountID, claims.ClientID)
-	if err != nil {
-		writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
-		return
-	}
-	if !owned {
-		writeAuthError(w, http.StatusForbidden, "access denied")
-		return
+	if claims != nil {
+		owned, err := h.accountOwnedByClient(accountID, claims.ClientID)
+		if err != nil {
+			writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
+			return
+		}
+		if !owned {
+			writeAuthError(w, http.StatusForbidden, "access denied")
+			return
+		}
 	}
 
 	filter := parseHTTPTransferFilter(r)

@@ -133,25 +133,27 @@ func (h *CreatePaymentHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		recipientNaziv = req.RecipientNazivCamel
 	}
 
-	owned, err := h.accountOwnedByClient(racunPosiljaocaID, claims.ClientID)
-	if err != nil {
-		writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
-		return
-	}
-	if !owned {
-		writeAuthError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	if recipientID != 0 {
-		ownedRecipient, err := h.recipientOwnedByClient(recipientID, claims.ClientID)
+	if claims != nil {
+		owned, err := h.accountOwnedByClient(racunPosiljaocaID, claims.ClientID)
 		if err != nil {
-			writeAuthError(w, http.StatusInternalServerError, "failed to verify recipient ownership")
+			writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
 			return
 		}
-		if !ownedRecipient {
+		if !owned {
 			writeAuthError(w, http.StatusForbidden, "access denied")
 			return
+		}
+
+		if recipientID != 0 {
+			ownedRecipient, err := h.recipientOwnedByClient(recipientID, claims.ClientID)
+			if err != nil {
+				writeAuthError(w, http.StatusInternalServerError, "failed to verify recipient ownership")
+				return
+			}
+			if !ownedRecipient {
+				writeAuthError(w, http.StatusForbidden, "access denied")
+				return
+			}
 		}
 	}
 
@@ -170,7 +172,7 @@ func (h *CreatePaymentHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		input.RecipientID = &id
 	}
 
-	if h.db != nil {
+	if h.db != nil && claims != nil {
 		var client models.Client
 		if err := h.db.First(&client, claims.ClientID).Error; err == nil {
 			input.ClientEmail = client.Email

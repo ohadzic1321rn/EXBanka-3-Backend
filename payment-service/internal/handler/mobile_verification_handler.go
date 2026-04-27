@@ -50,7 +50,7 @@ func (h *PaymentMobileVerificationHandler) Approve(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	if !requireClientBasicHTTP(w, claims, claims.ClientID) {
+	if claims != nil && !requireClientBasicHTTP(w, claims, claims.ClientID) {
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *PaymentMobileVerificationHandler) Reject(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	if !requireClientBasicHTTP(w, claims, claims.ClientID) {
+	if claims != nil && !requireClientBasicHTTP(w, claims, claims.ClientID) {
 		return
 	}
 
@@ -125,14 +125,16 @@ func (h *PaymentMobileVerificationHandler) authorize(w http.ResponseWriter, r *h
 		writeAuthError(w, http.StatusBadRequest, err.Error())
 		return 0, nil, false
 	}
-	owned, err := h.paymentOwnedByClient(paymentID, claims.ClientID)
-	if err != nil {
-		writeAuthError(w, http.StatusInternalServerError, "failed to verify payment ownership")
-		return 0, nil, false
-	}
-	if !owned {
-		writeAuthError(w, http.StatusForbidden, "access denied")
-		return 0, nil, false
+	if claims != nil {
+		owned, err := h.paymentOwnedByClient(paymentID, claims.ClientID)
+		if err != nil {
+			writeAuthError(w, http.StatusInternalServerError, "failed to verify payment ownership")
+			return 0, nil, false
+		}
+		if !owned {
+			writeAuthError(w, http.StatusForbidden, "access denied")
+			return 0, nil, false
+		}
 	}
 
 	return paymentID, claims, true

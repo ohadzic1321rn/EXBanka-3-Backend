@@ -77,14 +77,16 @@ func (h *PrenosHTTPHandler) create(w http.ResponseWriter, r *http.Request) {
 		racunPrimaocaBroj = strings.TrimSpace(req.RacunPrimaocaBrojCamel)
 	}
 
-	owned, err := h.accountOwnedByClient(racunPosiljaocaID, claims.ClientID)
-	if err != nil {
-		writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
-		return
-	}
-	if !owned {
-		writeAuthError(w, http.StatusForbidden, "access denied")
-		return
+	if claims != nil {
+		owned, err := h.accountOwnedByClient(racunPosiljaocaID, claims.ClientID)
+		if err != nil {
+			writeAuthError(w, http.StatusInternalServerError, "failed to verify account ownership")
+			return
+		}
+		if !owned {
+			writeAuthError(w, http.StatusForbidden, "access denied")
+			return
+		}
 	}
 
 	input := service.CreatePrenosInput{
@@ -94,7 +96,7 @@ func (h *PrenosHTTPHandler) create(w http.ResponseWriter, r *http.Request) {
 		Svrha:             req.Svrha,
 	}
 
-	if h.db != nil {
+	if h.db != nil && claims != nil {
 		var client models.Client
 		if err := h.db.First(&client, claims.ClientID).Error; err == nil {
 			input.ClientEmail = client.Email
@@ -130,14 +132,16 @@ func (h *PrenosHTTPHandler) verify(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	owned, err := h.paymentOwnedByClient(prenosID, claims.ClientID)
-	if err != nil {
-		writeAuthError(w, http.StatusInternalServerError, "failed to verify prenos ownership")
-		return
-	}
-	if !owned {
-		writeAuthError(w, http.StatusForbidden, "access denied")
-		return
+	if claims != nil {
+		owned, err := h.paymentOwnedByClient(prenosID, claims.ClientID)
+		if err != nil {
+			writeAuthError(w, http.StatusInternalServerError, "failed to verify prenos ownership")
+			return
+		}
+		if !owned {
+			writeAuthError(w, http.StatusForbidden, "access denied")
+			return
+		}
 	}
 
 	var body struct {
