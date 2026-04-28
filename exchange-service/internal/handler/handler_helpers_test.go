@@ -256,7 +256,7 @@ func TestHoldingToResponse_PreservesAssetFields(t *testing.T) {
 	h := service.HoldingWithPnL{
 		Holding: &models.PortfolioHoldingRecord{
 			ID: 1, UserID: 0, UserType: "bank", AssetID: 9, Quantity: 5, AvgBuyPrice: 100,
-			RealizedProfit: 12.5, IsPublic: true, AccountID: 7, CreatedAt: time.Now().UTC(),
+			RealizedProfit: 12.5, IsPublic: true, PublicQuantity: 3, ReservedQuantity: 1, AccountID: 7, CreatedAt: time.Now().UTC(),
 			Asset: models.MarketListingRecord{
 				Ticker: "AAPL", Name: "Apple",
 				Type: "stock", Exchange: models.MarketExchangeRecord{Acronym: "NASDAQ", Currency: "USD"},
@@ -274,6 +274,9 @@ func TestHoldingToResponse_PreservesAssetFields(t *testing.T) {
 	if resp.MarketValue != 550 || resp.UnrealizedPnL != 50 {
 		t.Errorf("pnl fields not propagated: %+v", resp)
 	}
+	if resp.PublicQuantity != 3 || resp.ReservedQuantity != 1 || resp.AvailableForOTC != 2 {
+		t.Errorf("OTC fields not propagated: %+v", resp)
+	}
 }
 
 func TestHoldingToResponse_EmptyAssetIsBlank(t *testing.T) {
@@ -289,12 +292,12 @@ func TestHoldingToResponse_EmptyAssetIsBlank(t *testing.T) {
 func TestBuildPortfolioSummary_AggregatesTotals(t *testing.T) {
 	now := time.Now().UTC()
 	h1 := service.HoldingWithPnL{
-		Holding:      &models.PortfolioHoldingRecord{ID: 1, RealizedProfit: 10, CreatedAt: now},
-		MarketValue:  100, UnrealizedPnL: 5,
+		Holding:     &models.PortfolioHoldingRecord{ID: 1, RealizedProfit: 10, CreatedAt: now},
+		MarketValue: 100, UnrealizedPnL: 5,
 	}
 	h2 := service.HoldingWithPnL{
-		Holding:      &models.PortfolioHoldingRecord{ID: 2, RealizedProfit: 20, CreatedAt: now},
-		MarketValue:  200, UnrealizedPnL: 15,
+		Holding:     &models.PortfolioHoldingRecord{ID: 2, RealizedProfit: 20, CreatedAt: now},
+		MarketValue: 200, UnrealizedPnL: 15,
 	}
 	summary := buildPortfolioSummary(0, "bank", []service.HoldingWithPnL{h1, h2})
 	if summary.PositionCount != 2 {

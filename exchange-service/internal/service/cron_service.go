@@ -36,6 +36,15 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider Rat
 		slog.Error("Failed to add order executor cron job", "error", err)
 	}
 
+	// OTC option expiry: release reserved shares after settlement date passes.
+	otcSvc := NewOtcService(repository.NewPortfolioRepository(db), repository.NewOtcRepository(db))
+	_, err = c.AddFunc("@every 1h", func() {
+		expireDueOtcContracts(otcSvc)
+	})
+	if err != nil {
+		slog.Error("Failed to add OTC expiry cron job", "error", err)
+	}
+
 	// Monthly tax collection: runs at 02:00 on the 1st of each month.
 	taxRepo := repository.NewTaxRepository(db)
 	taxSvc := NewTaxService(taxRepo, marketRepo, rateProvider)
@@ -58,6 +67,17 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider Rat
 	c.Start()
 	slog.Info("Exchange-service cron jobs started", "jobs", len(c.Entries()))
 	return c
+}
+
+func expireDueOtcContracts(otcSvc *OtcService) {
+	expired, err := otcSvc.ExpireDueContracts(time.Now().UTC())
+	if err != nil {
+		slog.Error("Failed to expire OTC contracts", "error", err)
+		return
+	}
+	if expired > 0 {
+		slog.Info("Expired OTC contracts", "count", expired)
+	}
 }
 
 func refreshListingPrices(db *gorm.DB) {

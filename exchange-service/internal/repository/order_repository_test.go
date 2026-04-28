@@ -241,8 +241,8 @@ func TestPortfolioRepository_BuyAndSellFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3, _ := prepo.GetHoldingByID(h.ID)
-	if !h3.IsPublic {
-		t.Error("expected public flag set")
+	if !h3.IsPublic || h3.PublicQuantity != h3.Quantity {
+		t.Errorf("expected all remaining quantity public, got public=%v publicQty=%v qty=%v", h3.IsPublic, h3.PublicQuantity, h3.Quantity)
 	}
 
 	if err := prepo.ExerciseOptionHolding(h.ID, 50); err != nil {
@@ -251,6 +251,90 @@ func TestPortfolioRepository_BuyAndSellFlow(t *testing.T) {
 	h4, _ := prepo.GetHoldingByID(h.ID)
 	if h4.Quantity != 0 {
 		t.Errorf("expected 0 qty after exercise, got %v", h4.Quantity)
+	}
+}
+
+func TestPortfolioRepository_OTCPublicQuantityValidation(t *testing.T) {
+	_, _, prepo, _, assetID := seedExchangeAndAsset(t, "pr_otc_public_qty", "OTC")
+
+	if err := prepo.RecordBuyFill(1, "client", assetID, 10, 12, 100); err != nil {
+		t.Fatal(err)
+	}
+	h, err := prepo.GetHoldingByUserAndAsset(1, "client", assetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepo.SetHoldingPublicQuantity(h.ID, 5); err != nil {
+		t.Fatalf("SetHoldingPublicQuantity: %v", err)
+	}
+	h, _ = prepo.GetHoldingByID(h.ID)
+	if h.PublicQuantity != 5 || h.ReservedQuantity != 0 || h.AvailableForOTC() != 5 {
+		t.Fatalf("unexpected OTC quantities: %+v available=%v", h, h.AvailableForOTC())
+	}
+
+	if err := prepo.ReserveHoldingQuantity(h.ID, 3); err != nil {
+		t.Fatalf("ReserveHoldingQuantity: %v", err)
+	}
+	h, _ = prepo.GetHoldingByID(h.ID)
+	if h.ReservedQuantity != 3 || h.AvailableForOTC() != 2 {
+		t.Fatalf("unexpected reserved quantity: reserved=%v available=%v", h.ReservedQuantity, h.AvailableForOTC())
+	}
+
+	if err := prepo.SetHoldingPublicQuantity(h.ID, 2); err == nil {
+		t.Fatal("expected public quantity below reserved quantity to fail")
+	}
+	if err := prepo.SetHoldingPublicQuantity(h.ID, 13); err == nil {
+		t.Fatal("expected public quantity above owned quantity to fail")
+	}
+	if err := prepo.ReserveHoldingQuantity(h.ID, 3); err == nil {
+		t.Fatal("expected reserving more than available OTC quantity to fail")
+	}
+	if _, err := prepo.RecordSellFill(1, "client", assetID, 10, 120); err == nil {
+		t.Fatal("expected selling below reserved quantity to fail")
+	}
+
+	if err := prepo.ReleaseHoldingReservedQuantity(h.ID, 2); err != nil {
+		t.Fatalf("ReleaseHoldingReservedQuantity: %v", err)
+	}
+	h, _ = prepo.GetHoldingByID(h.ID)
+	if h.ReservedQuantity != 1 || h.AvailableForOTC() != 4 {
+		t.Fatalf("unexpected quantities after release: reserved=%v available=%v", h.ReservedQuantity, h.AvailableForOTC())
+	}
+
+	if _, err := prepo.RecordSellFill(1, "client", assetID, 8, 120); err != nil {
+		t.Fatalf("RecordSellFill with enough unreserved quantity: %v", err)
+	}
+	h, _ = prepo.GetHoldingByID(h.ID)
+	if h.Quantity != 4 || h.PublicQuantity != 4 || h.AvailableForOTC() != 3 {
+		t.Fatalf("expected public quantity capped after sell, qty=%v public=%v available=%v", h.Quantity, h.PublicQuantity, h.AvailableForOTC())
+	}
+}
+
+func TestPortfolioRepository_OTCPublicQuantityRejectsNonStock(t *testing.T) {
+	db := openMarketRepositoryTestDB(t, "pr_otc_non_stock")
+	exch := models.MarketExchangeRecord{
+		Acronym: "FX", Name: "FX Exchange", MICCode: "FX1", Polity: "X", Currency: "USD",
+		Timezone: "UTC", WorkingHours: "09:00-17:00",
+	}
+	if err := db.Create(&exch).Error; err != nil {
+		t.Fatal(err)
+	}
+	listing := models.MarketListingRecord{
+		Ticker: "EUR/USD", Name: "Euro Dollar", Type: "forex",
+		ExchangeID: exch.ID, Price: 1.1, Ask: 1.11, Bid: 1.09, Volume: 1000,
+	}
+	if err := db.Create(&listing).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	prepo := NewPortfolioRepository(db)
+	if err := prepo.RecordBuyFill(1, "client", listing.ID, 10, 5, 1.1); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := prepo.GetHoldingByUserAndAsset(1, "client", listing.ID)
+	if err := prepo.SetHoldingPublicQuantity(h.ID, 1); err == nil {
+		t.Fatal("expected non-stock public quantity to fail")
 	}
 }
 

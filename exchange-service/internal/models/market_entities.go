@@ -3,18 +3,18 @@ package models
 import "time"
 
 type MarketExchangeRecord struct {
-	ID             uint                  `gorm:"primaryKey"`
-	Name           string                `gorm:"not null"`
-	Acronym        string                `gorm:"not null;uniqueIndex"`
-	MICCode        string                `gorm:"column:mic_code;not null;uniqueIndex"`
-	Polity         string                `gorm:"not null"`
-	Currency       string                `gorm:"not null"`
-	Timezone       string                `gorm:"not null"`
-	WorkingHours   string                `gorm:"column:working_hours;not null"`
-	UseManualTime  bool                  `gorm:"column:use_manual_time;not null;default:false"`
-	ManualTimeOpen bool                  `gorm:"column:manual_time_open;not null;default:false"`
-	Enabled        bool                  `gorm:"not null;default:true"`
-	Listings       []MarketListingRecord `gorm:"foreignKey:ExchangeID"`
+	ID             uint                       `gorm:"primaryKey"`
+	Name           string                     `gorm:"not null"`
+	Acronym        string                     `gorm:"not null;uniqueIndex"`
+	MICCode        string                     `gorm:"column:mic_code;not null;uniqueIndex"`
+	Polity         string                     `gorm:"not null"`
+	Currency       string                     `gorm:"not null"`
+	Timezone       string                     `gorm:"not null"`
+	WorkingHours   string                     `gorm:"column:working_hours;not null"`
+	UseManualTime  bool                       `gorm:"column:use_manual_time;not null;default:false"`
+	ManualTimeOpen bool                       `gorm:"column:manual_time_open;not null;default:false"`
+	Enabled        bool                       `gorm:"not null;default:true"`
+	Listings       []MarketListingRecord      `gorm:"foreignKey:ExchangeID"`
 	WorkingDays    []ExchangeWorkingDayRecord `gorm:"foreignKey:ExchangeID"`
 }
 
@@ -202,12 +202,12 @@ type OrderRecord struct {
 func (OrderRecord) TableName() string { return "orders" }
 
 type OrderTransactionRecord struct {
-	ID           uint      `gorm:"primaryKey"`
-	OrderID      uint      `gorm:"column:order_id;not null;index"`
+	ID           uint        `gorm:"primaryKey"`
+	OrderID      uint        `gorm:"column:order_id;not null;index"`
 	Order        OrderRecord `gorm:"foreignKey:OrderID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-	Quantity     int64     `gorm:"not null"`
-	PricePerUnit float64   `gorm:"column:price_per_unit;not null"`
-	ExecutedAt   time.Time `gorm:"column:executed_at;not null"`
+	Quantity     int64       `gorm:"not null"`
+	PricePerUnit float64     `gorm:"column:price_per_unit;not null"`
+	ExecutedAt   time.Time   `gorm:"column:executed_at;not null"`
 }
 
 func (OrderTransactionRecord) TableName() string { return "order_transactions" }
@@ -215,33 +215,118 @@ func (OrderTransactionRecord) TableName() string { return "order_transactions" }
 // Portfolio holdings — persistent, built from executed order transactions.
 
 type PortfolioHoldingRecord struct {
-	ID             uint                `gorm:"primaryKey"`
-	UserID         uint                `gorm:"column:user_id;not null;index:idx_portfolio_user_asset"`
-	UserType       string              `gorm:"column:user_type;not null"` // "client" or "bank" (all employees share the bank-owned portfolio)
-	AssetID        uint                `gorm:"column:asset_id;not null;index:idx_portfolio_user_asset"`
-	Asset          MarketListingRecord `gorm:"foreignKey:AssetID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
-	Quantity       float64             `gorm:"not null;default:0"`
-	AvgBuyPrice    float64             `gorm:"column:avg_buy_price;not null;default:0"`
-	IsPublic       bool                `gorm:"column:is_public;not null;default:false"`
-	AccountID      uint                `gorm:"column:account_id;not null"`
-	RealizedProfit float64             `gorm:"column:realized_profit;not null;default:0"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               uint                `gorm:"primaryKey"`
+	UserID           uint                `gorm:"column:user_id;not null;index:idx_portfolio_user_asset"`
+	UserType         string              `gorm:"column:user_type;not null"` // "client" or "bank" (all employees share the bank-owned portfolio)
+	AssetID          uint                `gorm:"column:asset_id;not null;index:idx_portfolio_user_asset"`
+	Asset            MarketListingRecord `gorm:"foreignKey:AssetID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	Quantity         float64             `gorm:"not null;default:0"`
+	AvgBuyPrice      float64             `gorm:"column:avg_buy_price;not null;default:0"`
+	IsPublic         bool                `gorm:"column:is_public;not null;default:false"`
+	PublicQuantity   float64             `gorm:"column:public_quantity;not null;default:0"`
+	ReservedQuantity float64             `gorm:"column:reserved_quantity;not null;default:0"`
+	AccountID        uint                `gorm:"column:account_id;not null"`
+	RealizedProfit   float64             `gorm:"column:realized_profit;not null;default:0"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (PortfolioHoldingRecord) TableName() string { return "portfolio_holdings" }
 
+func (h PortfolioHoldingRecord) EffectivePublicQuantity() float64 {
+	if h.PublicQuantity > 0 {
+		return h.PublicQuantity
+	}
+	if h.IsPublic {
+		return h.Quantity
+	}
+	return 0
+}
+
+func (h PortfolioHoldingRecord) AvailableForOTC() float64 {
+	available := h.EffectivePublicQuantity() - h.ReservedQuantity
+	if available < 0 {
+		return 0
+	}
+	return available
+}
+
+const (
+	OtcOfferStatusPending   = "pending"
+	OtcOfferStatusAccepted  = "accepted"
+	OtcOfferStatusDeclined  = "declined"
+	OtcOfferStatusCancelled = "cancelled"
+)
+
+type OtcOfferRecord struct {
+	ID              uint                   `gorm:"primaryKey"`
+	StockListingID  uint                   `gorm:"column:stock_listing_id;not null;index"`
+	StockListing    MarketListingRecord    `gorm:"foreignKey:StockListingID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	SellerHoldingID uint                   `gorm:"column:seller_holding_id;not null;index"`
+	SellerHolding   PortfolioHoldingRecord `gorm:"foreignKey:SellerHoldingID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	Amount          float64                `gorm:"not null"`
+	PricePerStock   float64                `gorm:"column:price_per_stock;not null"`
+	SettlementDate  time.Time              `gorm:"column:settlement_date;type:date;not null"`
+	Premium         float64                `gorm:"not null"`
+	LastModified    time.Time              `gorm:"column:last_modified;not null"`
+	ModifiedByID    uint                   `gorm:"column:modified_by_id;not null"`
+	ModifiedByType  string                 `gorm:"column:modified_by_type;not null"`
+	Status          string                 `gorm:"not null;default:'pending';index"`
+	BuyerID         uint                   `gorm:"column:buyer_id;not null;index"`
+	BuyerType       string                 `gorm:"column:buyer_type;not null"`
+	BuyerAccountID  uint                   `gorm:"column:buyer_account_id;not null;index"`
+	SellerID        uint                   `gorm:"column:seller_id;not null;index"`
+	SellerType      string                 `gorm:"column:seller_type;not null"`
+	SellerAccountID uint                   `gorm:"column:seller_account_id;not null;index"`
+	BankID          *uint                  `gorm:"column:bank_id;index"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (OtcOfferRecord) TableName() string { return "otc_offers" }
+
+const (
+	OtcContractStatusValid     = "valid"
+	OtcContractStatusExercised = "exercised"
+	OtcContractStatusExpired   = "expired"
+)
+
+type OtcContractRecord struct {
+	ID              uint                   `gorm:"primaryKey"`
+	OfferID         *uint                  `gorm:"column:offer_id;index"`
+	StockListingID  uint                   `gorm:"column:stock_listing_id;not null;index"`
+	StockListing    MarketListingRecord    `gorm:"foreignKey:StockListingID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	SellerHoldingID uint                   `gorm:"column:seller_holding_id;not null;index"`
+	SellerHolding   PortfolioHoldingRecord `gorm:"foreignKey:SellerHoldingID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	Amount          float64                `gorm:"not null"`
+	StrikePrice     float64                `gorm:"column:strike_price;not null"`
+	Premium         float64                `gorm:"not null"`
+	SettlementDate  time.Time              `gorm:"column:settlement_date;type:date;not null;index"`
+	BuyerID         uint                   `gorm:"column:buyer_id;not null;index"`
+	BuyerType       string                 `gorm:"column:buyer_type;not null"`
+	BuyerAccountID  uint                   `gorm:"column:buyer_account_id;not null;index"`
+	SellerID        uint                   `gorm:"column:seller_id;not null;index"`
+	SellerType      string                 `gorm:"column:seller_type;not null"`
+	SellerAccountID uint                   `gorm:"column:seller_account_id;not null;index"`
+	Status          string                 `gorm:"not null;default:'valid';index"`
+	BankID          *uint                  `gorm:"column:bank_id;index"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (OtcContractRecord) TableName() string { return "otc_contracts" }
+
 // TaxRecord tracks capital gains tax (15%) owed per user per month.
 
 type TaxRecord struct {
-	ID        uint      `gorm:"primaryKey"`
-	UserID    uint      `gorm:"column:user_id;not null;index:idx_tax_user_period"`
-	UserType  string    `gorm:"column:user_type;not null"`
-	AssetID   uint      `gorm:"column:asset_id;not null"`
-	Period    string    `gorm:"not null;index:idx_tax_user_period"` // "YYYY-MM", e.g. "2026-04"
-	ProfitRSD float64   `gorm:"column:profit_rsd;not null"`
-	TaxRSD    float64   `gorm:"column:tax_rsd;not null"` // 15% of profit_rsd
-	Status    string    `gorm:"not null;default:'unpaid'"` // unpaid, paid
+	ID        uint    `gorm:"primaryKey"`
+	UserID    uint    `gorm:"column:user_id;not null;index:idx_tax_user_period"`
+	UserType  string  `gorm:"column:user_type;not null"`
+	AssetID   uint    `gorm:"column:asset_id;not null"`
+	Period    string  `gorm:"not null;index:idx_tax_user_period"` // "YYYY-MM", e.g. "2026-04"
+	ProfitRSD float64 `gorm:"column:profit_rsd;not null"`
+	TaxRSD    float64 `gorm:"column:tax_rsd;not null"`   // 15% of profit_rsd
+	Status    string  `gorm:"not null;default:'unpaid'"` // unpaid, paid
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

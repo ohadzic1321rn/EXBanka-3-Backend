@@ -44,6 +44,10 @@ func TestMigrate_CreatesExpectedTables(t *testing.T) {
 		&models.FuturesContractRecord{},
 		&models.OptionRecord{},
 		&models.OrderRecord{},
+		&models.PortfolioHoldingRecord{},
+		&models.OtcOfferRecord{},
+		&models.OtcContractRecord{},
+		&models.TaxRecord{},
 	}
 	for _, m := range tableModels {
 		if !db.Migrator().HasTable(m) {

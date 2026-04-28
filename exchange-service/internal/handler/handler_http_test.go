@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,6 +329,67 @@ func TestPortfolioHTTP_Routes_HoldingNotFound(t *testing.T) {
 	h.PortfolioRoutes(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestPortfolioHTTP_Routes_SetPublicQuantity(t *testing.T) {
+	db := newTestDB(t, "h_pf_public_quantity")
+	_, assetID := seedExchangeAndListing(t, db, "PUB")
+	holding := models.PortfolioHoldingRecord{
+		UserID: 0, UserType: "bank", AssetID: assetID, Quantity: 10, AvgBuyPrice: 100, AccountID: 7,
+	}
+	if err := db.Create(&holding).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	h := setupPortfolioHandler(t, db)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/portfolio/holdings/%d/public", holding.ID), strings.NewReader(`{"publicQuantity":4}`))
+	req.Header.Set("Authorization", "Bearer "+bankToken(t))
+	rec := httptest.NewRecorder()
+	h.PortfolioRoutes(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["publicQuantity"].(float64) != 4 || body["availableForOtc"].(float64) != 4 {
+		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
+func TestPortfolioHTTP_Routes_SetPublicRejectsNonStock(t *testing.T) {
+	db := newTestDB(t, "h_pf_public_non_stock")
+	exch := models.MarketExchangeRecord{
+		Acronym: "FX", Name: "FX Exchange", MICCode: "FX1", Polity: "X", Currency: "USD",
+		Timezone: "UTC", WorkingHours: "09:00-17:00",
+	}
+	if err := db.Create(&exch).Error; err != nil {
+		t.Fatal(err)
+	}
+	listing := models.MarketListingRecord{
+		Ticker: "EUR/USD", Name: "Euro Dollar", Type: "forex",
+		ExchangeID: exch.ID, Price: 1.1, Ask: 1.11, Bid: 1.09, Volume: 1000,
+	}
+	if err := db.Create(&listing).Error; err != nil {
+		t.Fatal(err)
+	}
+	holding := models.PortfolioHoldingRecord{
+		UserID: 0, UserType: "bank", AssetID: listing.ID, Quantity: 10, AvgBuyPrice: 1.1, AccountID: 7,
+	}
+	if err := db.Create(&holding).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	h := setupPortfolioHandler(t, db)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/portfolio/holdings/%d/public", holding.ID), strings.NewReader(`{"publicQuantity":4}`))
+	req.Header.Set("Authorization", "Bearer "+bankToken(t))
+	rec := httptest.NewRecorder()
+	h.PortfolioRoutes(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

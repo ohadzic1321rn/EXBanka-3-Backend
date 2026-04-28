@@ -187,21 +187,40 @@ func (h *PortfolioHTTPHandler) setPublic(w http.ResponseWriter, r *http.Request,
 	}
 
 	var body struct {
-		IsPublic bool `json:"isPublic"`
+		IsPublic       *bool    `json:"isPublic"`
+		PublicQuantity *float64 `json:"publicQuantity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
 		return
 	}
 
-	if err := h.portfolioSvc.SetPublic(holdingID, body.IsPublic); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to update holding"})
+	switch {
+	case body.PublicQuantity != nil:
+		err = h.portfolioSvc.SetPublicQuantity(holdingID, *body.PublicQuantity)
+	case body.IsPublic != nil:
+		err = h.portfolioSvc.SetPublic(holdingID, *body.IsPublic)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "publicQuantity or isPublic is required"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
+	updated, err := h.portfolioSvc.GetHoldingByID(holdingID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "holding not found"})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"holdingId": holdingID,
-		"isPublic":  body.IsPublic,
+		"holdingId":        holdingID,
+		"isPublic":         updated.EffectivePublicQuantity() > 0,
+		"publicQuantity":   updated.EffectivePublicQuantity(),
+		"reservedQuantity": updated.ReservedQuantity,
+		"availableForOtc":  updated.AvailableForOTC(),
 	})
 }
 
@@ -232,6 +251,9 @@ type holdingResponse struct {
 	UnrealizedPnLPct float64 `json:"unrealizedPnLPct"`
 	RealizedProfit   float64 `json:"realizedProfit"`
 	IsPublic         bool    `json:"isPublic"`
+	PublicQuantity   float64 `json:"publicQuantity"`
+	ReservedQuantity float64 `json:"reservedQuantity"`
+	AvailableForOTC  float64 `json:"availableForOtc"`
 	AccountID        uint    `json:"accountId"`
 	CreatedAt        string  `json:"createdAt"`
 }
@@ -273,7 +295,10 @@ func holdingToResponse(h service.HoldingWithPnL) holdingResponse {
 		UnrealizedPnL:    h.UnrealizedPnL,
 		UnrealizedPnLPct: h.UnrealizedPnLPct,
 		RealizedProfit:   h.Holding.RealizedProfit,
-		IsPublic:         h.Holding.IsPublic,
+		IsPublic:         h.Holding.EffectivePublicQuantity() > 0,
+		PublicQuantity:   h.Holding.EffectivePublicQuantity(),
+		ReservedQuantity: h.Holding.ReservedQuantity,
+		AvailableForOTC:  h.Holding.AvailableForOTC(),
 		AccountID:        h.Holding.AccountID,
 		CreatedAt:        h.Holding.CreatedAt.UTC().Format(time.RFC3339),
 	}

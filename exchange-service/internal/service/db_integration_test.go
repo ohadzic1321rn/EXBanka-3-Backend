@@ -123,8 +123,16 @@ func TestPortfolioService_RecordFillAndList(t *testing.T) {
 		t.Fatalf("SetPublic: %v", err)
 	}
 	again, _ := psvc.GetHoldingByID(got.ID)
-	if !again.IsPublic {
-		t.Error("expected IsPublic=true after SetPublic")
+	if !again.IsPublic || again.PublicQuantity != again.Quantity {
+		t.Errorf("expected SetPublic to expose all remaining shares, got isPublic=%v publicQty=%v qty=%v", again.IsPublic, again.PublicQuantity, again.Quantity)
+	}
+
+	if err := psvc.SetPublicQuantity(got.ID, 3); err != nil {
+		t.Fatalf("SetPublicQuantity: %v", err)
+	}
+	again, _ = psvc.GetHoldingByID(got.ID)
+	if again.PublicQuantity != 3 || again.AvailableForOTC() != 3 {
+		t.Errorf("unexpected OTC quantities after SetPublicQuantity: public=%v available=%v", again.PublicQuantity, again.AvailableForOTC())
 	}
 
 	// ListHoldings (raw, no PnL).

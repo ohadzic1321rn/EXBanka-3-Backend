@@ -29,7 +29,7 @@ func (r *AccountRepository) FindByID(id uint) (*models.Account, error) {
 
 func (r *AccountRepository) FindByIDForUpdate(tx *gorm.DB, id uint) (*models.Account, error) {
 	var account models.Account
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "accounts"}}).
 		Table("accounts").
 		Select("accounts.*, currencies.kod as currency_kod").
 		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
@@ -55,7 +55,7 @@ func (r *AccountRepository) FindByBrojRacuna(brojRacuna string) (*models.Account
 
 func (r *AccountRepository) FindByBrojRacunaForUpdate(tx *gorm.DB, brojRacuna string) (*models.Account, error) {
 	var account models.Account
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "accounts"}}).
 		Table("accounts").
 		Select("accounts.*, currencies.kod as currency_kod").
 		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").

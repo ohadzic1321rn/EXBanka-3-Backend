@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
@@ -48,6 +49,33 @@ func (r *PortfolioRepository) ListHoldingsForUser(userID uint, userType string) 
 	if err := r.db.Preload("Asset").Preload("Asset.Exchange").
 		Where("user_id = ? AND user_type = ? AND quantity > 0", userID, userType).
 		Order("created_at ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// ListPublicOTCHoldings returns stock holdings with available public OTC quantity,
+// excluding the requester so buyers do not see their own advertised shares.
+func (r *PortfolioRepository) ListPublicOTCHoldings(excludeUserID uint, excludeUserType string) ([]models.PortfolioHoldingRecord, error) {
+	var records []models.PortfolioHoldingRecord
+	query := r.db.Preload("Asset").Preload("Asset.Exchange").
+		Joins("JOIN market_listings ON market_listings.id = portfolio_holdings.asset_id").
+		Where("portfolio_holdings.quantity > 0").
+		Where("market_listings.type = ?", string(models.ListingTypeStock)).
+		Where(`(
+			portfolio_holdings.public_quantity > portfolio_holdings.reserved_quantity
+			OR (
+				portfolio_holdings.is_public = ?
+				AND portfolio_holdings.public_quantity = 0
+				AND portfolio_holdings.quantity > portfolio_holdings.reserved_quantity
+			)
+		)`, true)
+
+	if excludeUserType != "" {
+		query = query.Where("NOT (portfolio_holdings.user_id = ? AND portfolio_holdings.user_type = ?)", excludeUserID, excludeUserType)
+	}
+
+	if err := query.Order("market_listings.ticker ASC, portfolio_holdings.id ASC").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -109,10 +137,27 @@ func (r *PortfolioRepository) RecordSellFill(userID uint, userType string, asset
 		if newQty < 0 {
 			newQty = 0
 		}
+		if newQty < h.ReservedQuantity {
+			return fmt.Errorf("cannot sell reserved OTC quantity")
+		}
+		publicQuantity := h.PublicQuantity
+		isPublic := h.IsPublic
+		if publicQuantity > newQty {
+			publicQuantity = newQty
+		}
+		if newQty == 0 {
+			publicQuantity = 0
+			isPublic = false
+		}
+		if publicQuantity > 0 {
+			isPublic = true
+		}
 
 		return tx.Model(&h).Updates(map[string]interface{}{
 			"quantity":        newQty,
 			"realized_profit": h.RealizedProfit + realizedProfit,
+			"is_public":       isPublic,
+			"public_quantity": publicQuantity,
 			"updated_at":      time.Now().UTC(),
 		}).Error
 	})
@@ -135,10 +180,95 @@ func (r *PortfolioRepository) ExerciseOptionHolding(id uint, exerciseProfit floa
 	})
 }
 
-// SetHoldingPublic toggles the is_public flag on a holding (used for OTC shares).
+// SetHoldingPublic toggles the legacy is_public flag on a holding (used for OTC shares).
 func (r *PortfolioRepository) SetHoldingPublic(id uint, isPublic bool) error {
-	return r.db.Model(&models.PortfolioHoldingRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"is_public":  isPublic,
-		"updated_at": time.Now().UTC(),
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var h models.PortfolioHoldingRecord
+		if err := tx.Preload("Asset").First(&h, id).Error; err != nil {
+			return err
+		}
+
+		publicQuantity := 0.0
+		if isPublic {
+			publicQuantity = h.Quantity
+		}
+
+		return setHoldingPublicQuantity(tx, &h, publicQuantity)
+	})
+}
+
+func (r *PortfolioRepository) SetHoldingPublicQuantity(id uint, publicQuantity float64) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var h models.PortfolioHoldingRecord
+		if err := tx.Preload("Asset").First(&h, id).Error; err != nil {
+			return err
+		}
+		return setHoldingPublicQuantity(tx, &h, publicQuantity)
+	})
+}
+
+func (r *PortfolioRepository) ReserveHoldingQuantity(id uint, quantity float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("reserved quantity must be positive")
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var h models.PortfolioHoldingRecord
+		if err := tx.Preload("Asset").First(&h, id).Error; err != nil {
+			return err
+		}
+		if h.Asset.Type != string(models.ListingTypeStock) {
+			return fmt.Errorf("only stock holdings can be reserved for OTC")
+		}
+		if h.AvailableForOTC() < quantity {
+			return fmt.Errorf("insufficient public OTC quantity")
+		}
+
+		return tx.Model(&h).Updates(map[string]interface{}{
+			"reserved_quantity": h.ReservedQuantity + quantity,
+			"updated_at":        time.Now().UTC(),
+		}).Error
+	})
+}
+
+func (r *PortfolioRepository) ReleaseHoldingReservedQuantity(id uint, quantity float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("released quantity must be positive")
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var h models.PortfolioHoldingRecord
+		if err := tx.First(&h, id).Error; err != nil {
+			return err
+		}
+		if quantity > h.ReservedQuantity {
+			return fmt.Errorf("released quantity exceeds reserved OTC quantity")
+		}
+
+		return tx.Model(&h).Updates(map[string]interface{}{
+			"reserved_quantity": h.ReservedQuantity - quantity,
+			"updated_at":        time.Now().UTC(),
+		}).Error
+	})
+}
+
+func setHoldingPublicQuantity(tx *gorm.DB, h *models.PortfolioHoldingRecord, publicQuantity float64) error {
+	if publicQuantity < 0 {
+		return fmt.Errorf("public quantity cannot be negative")
+	}
+	if h.Asset.Type != string(models.ListingTypeStock) && publicQuantity > 0 {
+		return fmt.Errorf("only stock holdings can be public for OTC")
+	}
+	if publicQuantity > h.Quantity {
+		return fmt.Errorf("public quantity cannot exceed owned quantity")
+	}
+	if publicQuantity < h.ReservedQuantity {
+		return fmt.Errorf("public quantity cannot be below reserved OTC quantity")
+	}
+
+	return tx.Model(h).Updates(map[string]interface{}{
+		"is_public":       publicQuantity > 0,
+		"public_quantity": publicQuantity,
+		"updated_at":      time.Now().UTC(),
 	}).Error
 }

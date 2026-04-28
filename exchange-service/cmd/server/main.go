@@ -47,10 +47,12 @@ func main() {
 	// Build shared repos and services before starting cron so they're reusable.
 	marketRepo := repository.NewMarketRepository(db)
 	orderRepo := repository.NewOrderRepository(db)
+	portfolioRepo := repository.NewPortfolioRepository(db)
+	otcRepo := repository.NewOtcRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
 	taxSvc := service.NewTaxService(taxRepo, marketRepo, rateProvider)
 	portfolioSvc := service.NewPortfolioService(
-		repository.NewPortfolioRepository(db),
+		portfolioRepo,
 		taxSvc,
 		marketRepo,
 		orderRepo,
@@ -74,6 +76,8 @@ func main() {
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
+	otcSvc := service.NewOtcService(portfolioRepo, otcRepo)
+	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
 	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)
@@ -120,6 +124,7 @@ func main() {
 	httpMux.Handle("/api/v1/listings/", middleware.CORS(http.HandlerFunc(marketH.ListingRoutes)))
 	httpMux.Handle("/api/v1/portfolio", middleware.CORS(http.HandlerFunc(portfolioH.PortfolioCollection)))
 	httpMux.Handle("/api/v1/portfolio/", middleware.CORS(http.HandlerFunc(portfolioH.PortfolioRoutes)))
+	httpMux.Handle("/api/v1/otc/", middleware.CORS(http.HandlerFunc(otcH.OtcRoutes)))
 	httpMux.Handle("/api/v1/orders", middleware.CORS(http.HandlerFunc(orderH.OrdersCollection)))
 	httpMux.Handle("/api/v1/orders/", middleware.CORS(http.HandlerFunc(orderH.OrderRoutes)))
 	httpMux.Handle("/api/v1/tax/", middleware.CORS(http.HandlerFunc(taxH.TaxRoutes)))

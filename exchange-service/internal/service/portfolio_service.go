@@ -137,6 +137,18 @@ func (s *PortfolioService) SetPublic(holdingID uint, isPublic bool) error {
 	return s.portfolioRepo.SetHoldingPublic(holdingID, isPublic)
 }
 
+func (s *PortfolioService) SetPublicQuantity(holdingID uint, publicQuantity float64) error {
+	return s.portfolioRepo.SetHoldingPublicQuantity(holdingID, publicQuantity)
+}
+
+func (s *PortfolioService) ReserveOTCQuantity(holdingID uint, quantity float64) error {
+	return s.portfolioRepo.ReserveHoldingQuantity(holdingID, quantity)
+}
+
+func (s *PortfolioService) ReleaseOTCReservedQuantity(holdingID uint, quantity float64) error {
+	return s.portfolioRepo.ReleaseHoldingReservedQuantity(holdingID, quantity)
+}
+
 // ExerciseOption exercises an in-the-money option held in the portfolio.
 //
 // Validations:
