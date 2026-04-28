@@ -45,5 +45,12 @@ jobs:
 
       - name: Docker build (no push)
         run: |
-          cd ..
-          docker build -f EXBanka-3-Backend/${{ matrix.service }}/Dockerfile .
+          case "${{ matrix.service }}" in
+            transfer-service|payment-service|exchange-service|loan-service)
+              docker build -f "${{ matrix.service }}/Dockerfile" "${{ matrix.service }}"
+              ;;
+            *)
+              cd ..
+              docker build -f "EXBanka-3-Backend/${{ matrix.service }}/Dockerfile" .
+              ;;
+          esac
