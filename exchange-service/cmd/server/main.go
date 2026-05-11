@@ -15,6 +15,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/database"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/handler"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/interbank"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/provider"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
@@ -64,6 +65,27 @@ func main() {
 
 	fundRepo := repository.NewFundRepository(db)
 	fundSvc := service.NewFundService(fundRepo, portfolioRepo, marketRepo, orderRepo, rateProvider)
+
+	// Inter-bank protocol wiring (Celina 5). The registry parses
+	// PARTNER_BANKS_JSON at startup and is the routing/auth source of
+	// truth for every /interbank request, inbound or outbound.
+	ibRegistry, err := interbank.NewRegistryFromJSON(
+		interbank.RoutingNumber(cfg.OwnRoutingNumber),
+		cfg.PartnerBanksJSON,
+	)
+	if err != nil {
+		slog.Error("Inter-bank registry init failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Inter-bank registry loaded",
+		"own_routing", cfg.OwnRoutingNumber,
+		"partner_count", len(ibRegistry.All()),
+	)
+	ibInboundRepo := repository.NewInterbankInboundRepository(db)
+	ibClient := interbank.NewClient(ibRegistry)
+	ibServer := interbank.NewServer(ibRegistry, ibInboundRepo, interbank.NoopProcessor{})
+	ibOtcH := interbank.NewOTCHandler(ibRegistry, portfolioRepo, interbank.StubDisplayNameResolver{})
+	_ = ibClient // outbound client is wired here, real callers land in a follow-up
 
 	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc)
 
@@ -139,6 +161,10 @@ func main() {
 	httpMux.Handle("/api/v1/tax/", middleware.CORS(http.HandlerFunc(taxH.TaxRoutes)))
 	httpMux.Handle("/api/v1/funds", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
 	httpMux.Handle("/api/v1/funds/", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
+	// Inter-bank wire endpoint — partner-bank traffic, no CORS, X-Api-Key auth.
+	httpMux.Handle("/interbank", ibServer)
+	httpMux.Handle("/public-stock", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibOtcH.PublicStock)))
+	httpMux.Handle("/user/", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibOtcH.UserInfo)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{
