@@ -51,6 +51,8 @@ func Migrate(db *gorm.DB) error {
 		&models.ClientFundTransactionRecord{},
 		&models.ClientFundPositionRecord{},
 		&models.FundPerformanceHistoryRecord{},
+		&models.InterbankInboundMessage{},
+		&models.InterbankOtcNegotiation{},
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}

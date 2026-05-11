@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -20,6 +21,13 @@ type Config struct {
 	JWTSecret string
 
 	AlphaVantageAPIKey string
+
+	// Inter-bank protocol (Celina 5). OwnRoutingNumber is the 3-digit prefix
+	// used in our account numbers. PartnerBanksJSON is a JSON array of
+	// {code,baseUrl,outboundKey,inboundKey,displayName} entries; parsed once
+	// at startup via interbank.NewRegistryFromJSON.
+	OwnRoutingNumber int
+	PartnerBanksJSON string
 }
 
 func Load() *Config {
@@ -36,12 +44,15 @@ func Load() *Config {
 		HTTPPort:   getEnv("HTTP_PORT", "8088"),
 		JWTSecret:          getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
 		AlphaVantageAPIKey: getEnv("ALPHA_VANTAGE_API_KEY", "demo"),
+		OwnRoutingNumber:   getEnvInt("BANK_ROUTING_NUMBER", 333),
+		PartnerBanksJSON:   getEnv("PARTNER_BANKS_JSON", "[]"),
 	}
 
 	slog.Info("Exchange-service config loaded",
 		"db_host", cfg.DBHost,
 		"http_port", cfg.HTTPPort,
 		"grpc_port", cfg.GRPCPort,
+		"own_routing", cfg.OwnRoutingNumber,
 	)
 
 	return cfg
@@ -50,6 +61,16 @@ func Load() *Config {
 func getEnv(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
+	}
+	return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		slog.Warn("invalid int env var, using default", "key", key, "raw", v, "default", defaultVal)
 	}
 	return defaultVal
 }
