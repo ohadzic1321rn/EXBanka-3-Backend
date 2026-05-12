@@ -89,7 +89,7 @@ func main() {
 	ibTxProcessor := interbank.NewOtcTxProcessor(ibRegistry, ibNegRepo, ibPendingRepo, ibOptionContractRepo)
 	ibServer := interbank.NewServer(ibRegistry, ibInboundRepo, ibTxProcessor)
 	ibOtcH := interbank.NewOTCHandler(ibRegistry, portfolioRepo, interbank.StubDisplayNameResolver{})
-	_ = ibClient // outbound client is wired here, real callers land in a follow-up
+	ibNegH := interbank.NewNegotiationsHandler(ibRegistry, ibNegRepo, ibClient)
 
 	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc)
 
@@ -169,6 +169,8 @@ func main() {
 	httpMux.Handle("/interbank", ibServer)
 	httpMux.Handle("/public-stock", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibOtcH.PublicStock)))
 	httpMux.Handle("/user/", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibOtcH.UserInfo)))
+	httpMux.Handle("/negotiations", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibNegH.Collection)))
+	httpMux.Handle("/negotiations/", interbank.AuthMiddleware(ibRegistry, http.HandlerFunc(ibNegH.Item)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{
