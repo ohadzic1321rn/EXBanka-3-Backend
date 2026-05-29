@@ -30,13 +30,15 @@ func TestLoad_ReturnsDefaults(t *testing.T) {
 	// Unset everything our code reads
 	for _, k := range []string{
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSL_MODE",
-		"GRPC_PORT", "HTTP_PORT", "JWT_SECRET",
+		"GRPC_PORT", "HTTP_PORT",
 		"JWT_ACCESS_DURATION_MINUTES", "JWT_REFRESH_DURATION_HOURS",
 		"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM",
 		"FRONTEND_URL",
 	} {
 		os.Unsetenv(k)
 	}
+	// JWT_SECRET has no default by design (required at startup); supply a test value.
+	t.Setenv("JWT_SECRET", "test-secret")
 
 	cfg := Load()
 	if cfg == nil {
@@ -60,6 +62,7 @@ func TestLoad_ReturnsDefaults(t *testing.T) {
 }
 
 func TestLoad_ReadsEnvOverrides(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("DB_HOST", "db.example.com")
 	t.Setenv("HTTP_PORT", "9999")
 	t.Setenv("JWT_ACCESS_DURATION_MINUTES", "30")

@@ -37,6 +37,11 @@ type Config struct {
 func Load() *Config {
 	_ = godotenv.Load()
 
+	if os.Getenv("JWT_SECRET") == "" {
+		slog.Error("JWT_SECRET is required and must not be empty", "service", "exchange-service")
+		os.Exit(1)
+	}
+
 	cfg := &Config{
 		DBHost:             getEnv("DB_HOST", "localhost"),
 		DBPort:             getEnv("DB_PORT", "5432"),
@@ -46,7 +51,7 @@ func Load() *Config {
 		DBSSLMode:          getEnv("DB_SSL_MODE", "disable"),
 		GRPCPort:           getEnv("GRPC_PORT", "9098"),
 		HTTPPort:           getEnv("HTTP_PORT", "8088"),
-		JWTSecret:          getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
 		AlphaVantageAPIKey: getEnv("ALPHA_VANTAGE_API_KEY", "demo"),
 		RedisAddr:          getEnv("REDIS_ADDR", ""),
 		RedisPassword:      getEnv("REDIS_PASSWORD", ""),

@@ -7,11 +7,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+const defaultAlphaVantageBaseURL = "https://www.alphavantage.co/query"
 
 // AlphaVantageClient is an HTTP client for the Alpha Vantage API with rate limiting and retry logic.
 type AlphaVantageClient struct {
@@ -26,9 +29,13 @@ type AlphaVantageClient struct {
 }
 
 func NewAlphaVantageClient(apiKey string) *AlphaVantageClient {
+	baseURL := defaultAlphaVantageBaseURL
+	if v := os.Getenv("ALPHA_VANTAGE_BASE_URL"); v != "" {
+		baseURL = v
+	}
 	return &AlphaVantageClient{
 		apiKey:  apiKey,
-		baseURL: "https://www.alphavantage.co/query",
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},

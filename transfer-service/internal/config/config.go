@@ -31,6 +31,11 @@ type Config struct {
 func Load() *Config {
 	_ = godotenv.Load()
 
+	if os.Getenv("JWT_SECRET") == "" {
+		slog.Error("JWT_SECRET is required and must not be empty", "service", "transfer-service")
+		os.Exit(1)
+	}
+
 	jwtAccessDur, _ := strconv.Atoi(getEnv("JWT_ACCESS_DURATION_MINUTES", "15"))
 	jwtRefreshDur, _ := strconv.Atoi(getEnv("JWT_REFRESH_DURATION_HOURS", "24"))
 	smtpPort, _ := strconv.Atoi(getEnv("SMTP_PORT", "1025"))
@@ -44,7 +49,7 @@ func Load() *Config {
 		DBSSLMode:          getEnv("DB_SSL_MODE", "disable"),
 		GRPCPort:           getEnv("GRPC_PORT", "9096"),
 		HTTPPort:           getEnv("HTTP_PORT", "8086"),
-		JWTSecret:          getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
 		JWTAccessDuration:  jwtAccessDur,
 		JWTRefreshDuration: jwtRefreshDur,
 		SMTPHost:           getEnv("SMTP_HOST", "mailhog"),
